@@ -131,9 +131,14 @@ dispatcher 轮询看板 open 任务 → 原子认领 → 按 fallback 链逐通�
 通道掉线自动退次选，空链任务置 failed。prompt 自动拼入项目 Spec（P3）与上轮 review 反馈。
 验证：`hub\verify_router.py`（离线单测 6 断言 + doubao-app 端到端 + 空链兜底）全过。
 
-### P5 · Skill 化交付
-把开发规范、HD-2D 管线、发布流程等沉淀为 Skill 包挂在任务上，
-智能体认领任务时自动加载对应 Skill —— 人只定义标准和验收，执行全自动化。
+### P5 · Skill 化交付 —— ✅ 首期已完成
+协作接入已沉淀为项目 Skill（`.trae/skills/ai-hub-collab/SKILL.md`）：
+任何 Trae 客户端打开本仓库即自动获得协作协议——MCP 接入配置、
+认领→交付→review 流程、kind 路由表、子任务/依赖拆分规范。
+网关 `chatgpt-app`、`doubao-app` 双 App 档位已挂（`ai-relay/config.yaml`），
+任意 OpenAI 客户端经 `:4000` 直调桌面 App 额度。
+环境解耦：MCP 板用独立 `hub/.venv`（mcp<2），与网关 venv（mcp 2.x）彻底解互斥。
+后续：HD-2D 管线、发布流程等领域 Skill 挂任务自动加载（方向不变）。
 
 ## 快速开始
 

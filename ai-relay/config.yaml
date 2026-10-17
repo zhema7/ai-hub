@@ -102,9 +102,9 @@ model_list:
     model_info:
       id: kimi-vip-hs-oauth
 
-  # ---------- 豆包 App 额度（GUI 自动化，经适配桥 doubao_bridge.py，零 API Key） ----------
-  # 前提：运行 hub\start-doubao.ps1 + 已登录的豆包桌面端
-  # 注意：GUI 串行慢速（~20-60s/轮），打字会短暂抢前台焦点；不进任何 fallback 链
+  # ---------- 豆包 App 额度（CDP 后台自动化，经适配桥 doubao_bridge.py，零 API Key） ----------
+  # 前提：运行 hub\start-doubao.ps1（自动带 --remote-debugging-port=9223 拉起豆包）+ 已登录
+  # 注意：CDP 串行（~9s/轮），全程后台零抢焦点；不进任何 fallback 链
   - model_name: doubao-app
     litellm_params:
       model: openai/doubao-app
@@ -112,7 +112,19 @@ model_list:
       api_key: sk-local
       timeout: 600
     model_info:
-      id: doubao-app-uia
+      id: doubao-app-cdp
+
+  # ---------- ChatGPT App 额度（CDP 后台自动化，经适配桥 chatgpt_bridge.py，零 API Key） ----------
+  # 前提：运行 hub\start-chatgpt.ps1（自动带 --remote-debugging-port=9222 拉起 ChatGPT）+ 已登录
+  # 注意：推理模型 ~130s/轮，额度限流时桥直接 502；不进任何 fallback 链
+  - model_name: chatgpt-app
+    litellm_params:
+      model: openai/chatgpt-app
+      api_base: http://127.0.0.1:4302/v1
+      api_key: sk-local
+      timeout: 600
+    model_info:
+      id: chatgpt-app-cdp
 
 # ============================================================
 # 后续要加其它平台时，model 前缀统一写 openai/，从这里挑 api_base：
