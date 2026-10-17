@@ -100,13 +100,17 @@ GitHub 全局搜索 "uiautomation llm agent" / "gui automation chatbot api" **�
 ### P2 · 豆包执行器后台化
 CDP 优先（豆包同为 Electron），备选剪贴板 + WM_PASTE。目标：打字/读回复零前台抢占。
 
-### P3 · 看板式多智能体协作（参照 routa）
+### P3 · 看板式多智能体协作（参照 routa）—— ✅ 首期已完成
 任务板升级为项目级看板，实现"**任意 AI 客户端跨端、跨平台共同完成一个项目**"：
-- **任务即数据**：看板状态机（backlog → doing → review → done）存 SQLite，
+- **任务即数据**：看板状态机（blocked → open/backlog → doing → review → done / failed）存 SQLite，
   产物落 artifacts/ —— 智能体/应用/机器怎么切换，任务现场都在。
-- **认领-回报协议**：已有 MCP 任务板（:4300，Trae/WorkBuddy 已接入）扩展
-  任务依赖、子任务拆分、review 回流。
-- **Spec 共享**：项目级 spec/design 文档作为 artifact 在智能体间传递上下文。
+- **认领-回报协议**：MCP 任务板（:4300，Trae/WorkBuddy 已接入）已扩展
+  任务依赖（depends_on 未完成自动 blocked，解锁自动进 open）、子任务拆分（parent_id）、
+  review 回流（task_report review → task_review 通过/打回带 feedback 返工）。
+- **Spec 共享**：项目级 spec/design 文档经 spec_write / spec_read / spec_list 在智能体间传递上下文。
+- 工具面：14 个 MCP 工具（新增 task_create / task_board / task_subtasks / task_review /
+  spec_write / spec_read / spec_list），REST 同步扩展 + `/api/board`；
+  kind / priority 字段已为 P4 路由预留。验证：`hub\verify_mcp.py` 12 步全过。
 
 ### P4 · 能力路由：最低成本实现最高效开发
 任务板认领时按"模型优劣势 × 成本"双维路由：
