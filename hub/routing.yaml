@@ -20,13 +20,13 @@ channels:
     enabled: true
 
   - id: chatgpt-app
-    endpoint: http://127.0.0.1:4302/v1   # ChatGPT 桌面 App 桥（P1 CDP 封装中，未上线）
+    endpoint: http://127.0.0.1:4302/v1   # ChatGPT 桌面 App 桥（CDP 驱动，P1 已上线）
     model: chatgpt-app
     cost: member                          # 花 ChatGPT 订阅额度
     strengths: [reasoning, multimodal]
     rank: { reasoning: 1 }
-    timeout: 120
-    enabled: false
+    timeout: 420                          # GPT-6.1 Sol 推理模型单轮 ~130s+
+    enabled: true
 
   # ---- 会员订阅档 ----
   - id: kimi-vip
