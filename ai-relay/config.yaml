@@ -1,0 +1,147 @@
+# ============================================================
+# 个人 AI 中转站 · LiteLLM Proxy 配置
+# 统一入口：http://127.0.0.1:4000
+#   OpenAI 兼容：   POST /v1/chat/completions
+#   Anthropic 兼容：POST /v1/messages
+#
+# 上游额度（2 家，2026-10-16 现役模型）：
+#   Kimi 开放平台 ：api.moonshot.cn/v1
+#                  kimi-k3(1M) / kimi-k2.7-code-highspeed(256k) / kimi-k2.6(256k)
+#   火山方舟(豆包)：ark.cn-beijing.volces.com/api/v3（Model ID 直连，无需 ep 接入点）
+#                  doubao-seed-evolving(1024k, Coding&Agent)
+#                  doubao-seed-2-1-pro-260915(1024k 旗舰)
+#                  doubao-seed-2-1-lite-260915(1024k 高并发)
+#
+# 下游客户端：Codex CLI（codex --profile relay）、WorkBuddy（自定义模型）
+#            配置见 clients/ 目录，由 connect-clients.ps1 安装
+#
+# 核心机制：
+#   同一个 model_name（能力档位）下挂多家「平台部署」，
+#   路由器自动在它们之间挑选 —— 这就是"一个任务走不同平台"。
+#   客户端只写档位名（cheap / coding / think / long），
+#   不关心实际落到 Kimi 还是豆包。
+# ============================================================
+
+model_list:
+  # ---------- 档位 cheap：分类 / 摘要 / 格式化 / commit message ----------
+  # 豆包 lite：RPM 30000 高并发、便宜，1024k 上下文
+  - model_name: cheap
+    litellm_params:
+      model: openai/doubao-seed-2-1-lite-260915
+      api_base: https://ark.cn-beijing.volces.com/api/v3
+      api_key: os.environ/ARK_API_KEY
+    model_info:
+      id: doubao-cheap
+
+  # ---------- 档位 coding：编程 Agent 主力（两家都是现役 Coding 专用模型） ----------
+  # Kimi K2.7 Code 高速版：官方明确适配 Codex / Claude Code / Cline，~180 tok/s
+  - model_name: coding
+    litellm_params:
+      model: openai/kimi-k2.7-code-highspeed
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      id: kimi-coding
+  # 豆包 Seed Evolving：方舟官方当前首推的 Coding & Agent 模型，周级迭代
+  - model_name: coding
+    litellm_params:
+      model: openai/doubao-seed-evolving
+      api_base: https://ark.cn-beijing.volces.com/api/v3
+      api_key: os.environ/ARK_API_KEY
+    model_info:
+      id: doubao-coding
+
+  # ---------- 档位 think：最强推理（两家旗舰，均为深度思考模型） ----------
+  - model_name: think
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      id: kimi-think
+  - model_name: think
+    litellm_params:
+      model: openai/doubao-seed-2-1-pro-260915
+      api_base: https://ark.cn-beijing.volces.com/api/v3
+      api_key: os.environ/ARK_API_KEY
+    model_info:
+      id: doubao-think
+
+  # ---------- 档位 long：超长上下文（都是 1M token 级） ----------
+  - model_name: long
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: https://api.moonshot.cn/v1
+      api_key: os.environ/MOONSHOT_API_KEY
+    model_info:
+      id: kimi-long
+  - model_name: long
+    litellm_params:
+      model: openai/doubao-seed-2-1-lite-260915
+      api_base: https://ark.cn-beijing.volces.com/api/v3
+      api_key: os.environ/ARK_API_KEY
+    model_info:
+      id: doubao-long
+
+  # ---------- Kimi 会员额度（OAuth 套餐，经适配桥 kimi_bridge.py，不耗开放平台 Key） ----------
+  # 前提：运行 .\start-kimi-vip.ps1（kimi web + 适配桥 127.0.0.1:4100）
+  - model_name: kimi-vip
+    litellm_params:
+      model: openai/kimi-vip
+      api_base: http://127.0.0.1:4100/v1
+      api_key: sk-local
+      timeout: 600
+    model_info:
+      id: kimi-vip-oauth
+  - model_name: kimi-vip-hs
+    litellm_params:
+      model: openai/kimi-vip-hs
+      api_base: http://127.0.0.1:4100/v1
+      api_key: sk-local
+      timeout: 600
+    model_info:
+      id: kimi-vip-hs-oauth
+
+  # ---------- 豆包 App 额度（GUI 自动化，经适配桥 doubao_bridge.py，零 API Key） ----------
+  # 前提：运行 hub\start-doubao.ps1 + 已登录的豆包桌面端
+  # 注意：GUI 串行慢速（~20-60s/轮），打字会短暂抢前台焦点；不进任何 fallback 链
+  - model_name: doubao-app
+    litellm_params:
+      model: openai/doubao-app
+      api_base: http://127.0.0.1:4301/v1
+      api_key: sk-local
+      timeout: 600
+    model_info:
+      id: doubao-app-uia
+
+# ============================================================
+# 后续要加其它平台时，model 前缀统一写 openai/，从这里挑 api_base：
+#   OpenAI 平台 API（注意：是 platform.openai.com 余额，不是 ChatGPT 订阅）
+#                                https://api.openai.com/v1
+#   通义千问 DashScope          : https://dashscope.aliyuncs.com/compatible-mode/v1
+#   硅基流动 SiliconFlow        : https://api.siliconflow.cn/v1
+#   MiniMax                     : https://api.minimax.chat/v1
+#   DeepSeek                    : https://api.deepseek.com/v1
+#   智谱 GLM                    : https://open.bigmodel.cn/api/paas/v4
+# ============================================================
+
+router_settings:
+  # P1 用 simple-shuffle（同档位随机打散，两家额度轮流消耗）
+  # P2 做「额度优先级」时再换：least-busy / usage-based-routing-v2 / cost-based-routing
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 600
+  allowed_fails: 3
+  cooldown_time: 30
+  # 档位降级链：某档位两家都挂了，自动降到下一档
+  fallbacks:
+    - think: ["coding", "cheap"]
+    - coding: ["cheap"]
+    - long: ["coding", "cheap"]
+
+litellm_settings:
+  # 客户端（如 Codex）带的推理参数上游不一定认，自动丢弃而不是报错
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

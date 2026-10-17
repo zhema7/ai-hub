@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ai-hub-board": {
+      "type": "sse",
+      "url": "http://127.0.0.1:4300/sse"
+    }
+  }
+}

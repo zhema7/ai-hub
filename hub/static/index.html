@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Hub · 多智能体调度台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1115; color: #e6e8ee; min-height: 100vh; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: #161a22; border-bottom: 1px solid #262c38; position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .badges { display: flex; gap: 8px; margin-left: auto; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; background: #2a3040; color: #8a93a8; }
+  .badge.up { background: #14352a; color: #3ecf8e; }
+  .badge.down { background: #3a1d22; color: #f06a6a; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
+  .card { background: #161a22; border: 1px solid #262c38; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  label { font-size: 12px; color: #8a93a8; display: block; margin-bottom: 4px; }
+  input, select, textarea { background: #0f1115; border: 1px solid #2a3040; color: #e6e8ee; border-radius: 6px; padding: 8px 10px; font-size: 13px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #4f7cff; }
+  textarea { min-height: 110px; resize: vertical; font-family: inherit; }
+  .field { flex: 1; min-width: 140px; }
+  button { background: #4f7cff; color: #fff; border: none; border-radius: 6px; padding: 9px 22px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #3f6bef; }
+  button:disabled { background: #2a3040; cursor: not-allowed; }
+  .btn-cancel { background: transparent; border: 1px solid #f06a6a; color: #f06a6a; padding: 4px 12px; font-size: 12px; }
+  .btn-cancel:hover { background: #3a1d22; }
+  h2 { font-size: 14px; color: #8a93a8; margin: 20px 0 10px; font-weight: 500; }
+  .task { cursor: pointer; transition: border-color .15s; }
+  .task:hover { border-color: #3a4256; }
+  .task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .status { font-size: 11px; padding: 2px 10px; border-radius: 10px; white-space: nowrap; }
+  .st-queued   { background: #2a3040; color: #8a93a8; }
+  .st-running  { background: #1a2a4a; color: #6ea8ff; animation: pulse 1.5s infinite; }
+  .st-done     { background: #14352a; color: #3ecf8e; }
+  .st-error    { background: #3a1d22; color: #f06a6a; }
+  .st-cancelled{ background: #3a2f1a; color: #e8b450; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .task-name { font-weight: 600; font-size: 14px; }
+  .task-meta { font-size: 12px; color: #8a93a8; }
+  .task-prompt { font-size: 12px; color: #6b7386; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail { margin-top: 12px; border-top: 1px solid #262c38; padding-top: 12px; }
+  .detail pre { background: #0f1115; border: 1px solid #262c38; border-radius: 6px; padding: 12px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow-y: auto; }
+  .detail .sec { margin-bottom: 10px; }
+  .detail .sec-title { font-size: 12px; color: #8a93a8; margin-bottom: 4px; }
+  .empty { color: #525a6e; text-align: center; padding: 40px 0; font-size: 13px; }
+  .hint { font-size: 12px; color: #6b7386; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Hub · 多智能体调度台</h1>
+  <div class="badges" id="badges"></div>
+</header>
+<main>
+  <div class="card">
+    <div class="row">
+      <div class="field" style="flex:2">
+        <label>任务名称（可选）</label>
+        <input id="name" placeholder="给任务起个名字">
+      </div>
+      <div class="field">
+        <label>执行通道</label>
+        <select id="kind">
+          <option value="cli">CLI 执行器（会员订阅，可操作文件）</option>
+          <option value="llm">LLM 对话（经中转站网关）</option>
+        </select>
+      </div>
+      <div class="field" id="targetWrap" style="display:none">
+        <label>模型档位</label>
+        <select id="target"></select>
+      </div>
+      <div class="field" id="modelWrap">
+        <label>模型别名（可选，默认 CLI 配置）</label>
+        <input id="model" placeholder="如 kimi-for-coding">
+      </div>
+    </div>
+    <div class="row" id="cwdWrap">
+      <div class="field">
+        <label>工作目录（CLI 在此目录内操作）</label>
+        <input id="cwd" value="c:\kimi\ai-hub">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>任务指令</label>
+        <textarea id="prompt" placeholder="描述要完成的任务…"></textarea>
+      </div>
+    </div>
+    <button id="submit">发布任务</button>
+    <span class="hint" id="submitHint"></span>
+  </div>
+
+  <h2>任务列表 <span id="count" style="color:#525a6e"></span></h2>
+  <div id="tasks"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const STATUS_TEXT = { queued: '排队中', running: '运行中', done: '完成', error: '失败', cancelled: '已取消' };
+let targets = null;
+let openId = null;        // 当前展开的任务
+let refreshing = false;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+
+async function refreshHealth() {
+  try {
+    const h = await api('/api/health');
+    $('badges').innerHTML = '';
+    const items = [ ['网关', h.gateway], ['适配桥', h.bridge], ['kimi CLI', h.kimi_cli] ];
+    if (!h.master_key) items.push(['master_key 缺失', false]);
+    for (const [name, up] of items) {
+      const b = document.createElement('span');
+      b.className = 'badge ' + (up ? 'up' : 'down');
+      b.textContent = name + (up ? ' ●' : ' ○');
+      $('badges').appendChild(b);
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+async function loadTargets() {
+  targets = await api('/api/targets');
+  fillTargets();
+}
+
+function fillTargets() {
+  const kind = $('kind').value;
+  const list = targets[kind] || [];
+  const sel = $('target');
+  sel.innerHTML = '';
+  for (const t of list) {
+    const o = document.createElement('option');
+    o.value = t.id;
+    o.textContent = t.id + ' — ' + t.desc + (t.available ? '' : '（不可用）');
+    o.disabled = !t.available;
+    sel.appendChild(o);
+  }
+  const isLlm = kind === 'llm';
+  $('targetWrap').style.display = isLlm ? '' : 'none';
+  $('modelWrap').style.display = isLlm ? 'none' : '';
+  $('cwdWrap').style.display = isLlm ? 'none' : '';
+}
+
+$('kind').addEventListener('change', fillTargets);
+
+$('submit').addEventListener('click', async () => {
+  const body = {
+    kind: $('kind').value,
+    name: $('name').value,
+    target: $('target').value || '',
+    model: $('model').value,
+    cwd: $('cwd').value,
+    prompt: $('prompt').value,
+  };
+  if (!body.prompt.trim()) { $('submitHint').textContent = '请填写任务指令'; return; }
+  $('submit').disabled = true;
+  try {
+    const r = await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('submitHint').textContent = '已发布：' + r.id;
+    $('prompt').value = ''; $('name').value = '';
+    refreshTasks();
+  } catch (e) {
+    $('submitHint').textContent = '发布失败：' + e.message;
+  } finally {
+    $('submit').disabled = false;
+  }
+});
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN', { hour12: false });
+}
+function fmtDur(t) {
+  if (!t.started_at) return '';
+  const end = t.finished_at || Date.now() / 1000;
+  const s = Math.round(end - t.started_at);
+  return s < 60 ? s + 's' : Math.floor(s / 60) + 'm' + (s % 60) + 's';
+}
+
+let lastFp = '';
+
+async function refreshTasks(force) {
+  if (refreshing && !force) return;
+  refreshing = true;
+  try {
+    const list = await api('/api/tasks');
+    // 指纹未变时不重建 DOM（保护点击/选择/元素句柄），只原地刷耗时
+    const fp = JSON.stringify(list.map(t => [t.id, t.status, t.result_len, t.finished_at])) + '|' + openId;
+    if (!force && fp === lastFp) {
+      const cards = document.querySelectorAll('#tasks .task');
+      list.forEach((t, i) => {
+        const meta = cards[i] && cards[i].querySelector('.task-meta');
+        if (meta) meta.textContent = [t.kind === 'cli' ? 'CLI' : t.target, fmtTime(t.created_at), fmtDur(t)].filter(Boolean).join(' · ');
+      });
+      return;
+    }
+    lastFp = fp;
+    $('count').textContent = '（' + list.length + '）';
+    const box = $('tasks');
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">还没有任务，发布一个试试</div>';
+      return;
+    }
+    for (const t of list) {
+      const card = document.createElement('div');
+      card.className = 'card task';
+      card.dataset.id = t.id;
+      const head = document.createElement('div');
+      head.className = 'task-head';
+
+      const st = document.createElement('span');
+      st.className = 'status st-' + t.status;
+      st.textContent = STATUS_TEXT[t.status] || t.status;
+      head.appendChild(st);
+
+      const name = document.createElement('span');
+      name.className = 'task-name';
+      name.textContent = t.name || t.id;
+      head.appendChild(name);
+
+      const meta = document.createElement('span');
+      meta.className = 'task-meta';
+      meta.textContent = [t.kind === 'cli' ? 'CLI' : t.target, fmtTime(t.created_at), fmtDur(t)].filter(Boolean).join(' · ');
+      head.appendChild(meta);
+
+      if (t.status === 'queued' || t.status === 'running') {
+        const btn = document.createElement('button');
+        btn.className = 'btn-cancel';
+        btn.textContent = '取消';
+        btn.style.marginLeft = 'auto';
+        btn.addEventListener('click', async ev => {
+          ev.stopPropagation();
+          await api('/api/tasks/' + t.id + '/cancel', { method: 'POST' }).catch(() => {});
+          refreshTasks();
+        });
+        head.appendChild(btn);
+      }
+      card.appendChild(head);
+
+      const ph = document.createElement('div');
+      ph.className = 'task-prompt';
+      ph.textContent = t.prompt_head || '';
+      card.appendChild(ph);
+
+      if (openId === t.id) {
+        card.appendChild(await renderDetail(t));
+      }
+      box.appendChild(card);
+    }
+  } finally {
+    refreshing = false;
+  }
+}
+
+async function renderDetail(t) {
+  const d = document.createElement('div');
+  d.className = 'detail';
+  const full = await api('/api/tasks/' + t.id);
+
+  const addSec = (title, text) => {
+    const sec = document.createElement('div');
+    sec.className = 'sec';
+    const ti = document.createElement('div');
+    ti.className = 'sec-title';
+    ti.textContent = title;
+    const pre = document.createElement('pre');
+    pre.textContent = text || '（空）';
+    sec.appendChild(ti); sec.appendChild(pre);
+    d.appendChild(sec);
+  };
+
+  addSec('指令', full.prompt);
+  if (full.status === 'running' && full.kind === 'cli') {
+    try {
+      const log = await api('/api/tasks/' + t.id + '/log?tail=15');
+      if (log.lines.length) addSec('实时事件流（最近 15 条）', log.lines.join('\n'));
+    } catch (e) {}
+  }
+  if (full.result) addSec('结果', full.result);
+  if (full.error) addSec('错误', full.error);
+  if (full.session_id) {
+    const sec = document.createElement('div');
+    sec.className = 'sec-title';
+    sec.textContent = '会话续聊：kimi -r ' + full.session_id;
+    d.appendChild(sec);
+  }
+  return d;
+}
+
+// 事件委托：#tasks 容器永不被替换，点击事件不受 3s 重渲染影响
+$('tasks').addEventListener('click', ev => {
+  if (ev.target.closest('.btn-cancel')) return;  // 取消按钮有自己的处理器
+  const card = ev.target.closest('.task');
+  if (!card || !card.dataset.id) return;
+  openId = openId === card.dataset.id ? null : card.dataset.id;
+  refreshTasks(true);
+});
+
+loadTargets();
+refreshHealth();
+refreshTasks();
+setInterval(refreshTasks, 3000);
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>

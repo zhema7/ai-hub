@@ -1,0 +1,17 @@
+# 密钥与运行环境
+.env
+.kimi-web-token
+.venv/
+__pycache__/
+*.pyc
+*.log
+
+# LiteLLM 运行时
+litellm.db
+litellm.db-journal
+
+# Hub 运行时数据（账本/日志/产物/沙箱）
+hub/data/
+
+# 临时探针脚本
+hub/cdp_probe*.py

@@ -1,0 +1,23 @@
+# ============================================================
+# Codex CLI → 本机 ai-relay 中转站
+# 安装：在 ai-relay 目录运行 .\connect-clients.ps1
+#       （脚本会把本文件复制到 %USERPROFILE%\.codex\relay.config.toml）
+# 使用：codex --profile relay
+#
+# 不想用 profile 时：把下面 6 行合并进 %USERPROFILE%\.codex\config.toml
+# （若已有 model / model_provider，替换其值），然后直接运行 codex。
+# ============================================================
+
+# 发给中转站的档位：cheap | coding | think | long
+# 会话中也可用 /model 临时切换档位
+model = "coding"
+model_provider = "relay"
+# coding 档两家模型均为 256k 上下文；切 think/long 档时可改为 1048576
+model_context_window = 262144
+
+[model_providers.relay]
+name = "ai-relay (localhost)"
+base_url = "http://127.0.0.1:4000/v1"
+env_key = "RELAY_API_KEY"
+# 统一走 Chat Completions，Kimi 与豆包均兼容；工具调用正常
+wire_api = "chat"
