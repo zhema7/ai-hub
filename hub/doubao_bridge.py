@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 # 豆包 App 执行器 → OpenAI 兼容接口 适配桥（127.0.0.1:4301）
-# 对外：POST /v1/chat/completions（模型名 doubao-app），内部经 doubao_executor 驱动豆包桌面端
+# 对外：POST /v1/chat/completions（模型名 doubao-app），内部经执行器驱动豆包桌面端
 # 花的是豆包 App 会员/免费额度，零 API Key；可挂进 LiteLLM 网关当档位
 # 启动：.\start-doubao.ps1（复用 ai-relay\.venv）
-# 注意：GUI 单例，全局锁串行；打字会短暂抢前台焦点（send-input 硬要求）
+# 后端切换（P2 起默认 CDP）：
+#   CDP 后端  = doubao_executor_cdp（Runtime.evaluate 注入，全程后台零抢焦点，须 --remote-debugging-port=9223）
+#   UIA 后端  = doubao_executor（winapp send-input 打字，须短暂前台；CDP 不可用时改回此行）
+from doubao_executor_cdp import DoubaoError, ask
 import asyncio
 import json
 import time
@@ -11,8 +14,6 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-
-from doubao_executor import DoubaoError, ask
 
 MODEL = "doubao-app"
 app = FastAPI()
