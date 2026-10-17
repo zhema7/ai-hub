@@ -1,0 +1,90 @@
+# AI Hub · P4 能力路由表
+# 路由规则：任务 kind 匹配 strengths → 健康探测（enabled 且端口通）→
+#           成本档升序（free_app > member > metered，成本越低越优先）+ rank 升序 → fallback 链
+# 任务 kind 约定（task_create 的 kind 参数）：
+#   coding    编码 Agent 主力      long      长文档/架构设计（超长上下文）
+#   writing   中文创作/文案        reasoning 复杂推理/多模态
+#   bulk      批量分类/摘要/格式化  realtime  实时热点信息
+#   chat      通用对话（默认兜底，task/空 kind 按 chat 路由）
+cost_order: [free_app, member, metered]
+
+channels:
+  # ---- App 免费额度档（最优先） ----
+  - id: doubao-app
+    endpoint: http://127.0.0.1:4301/v1   # 豆包桌面 App 桥（winapp UI 驱动，花 App 免费/会员额度）
+    model: doubao-app
+    cost: free_app
+    strengths: [writing, chat]
+    rank: { writing: 1, chat: 1 }
+    timeout: 120                          # GUI 单轮 25-40s，留足余量
+    enabled: true
+
+  - id: chatgpt-app
+    endpoint: http://127.0.0.1:4302/v1   # ChatGPT 桌面 App 桥（P1 CDP 封装中，未上线）
+    model: chatgpt-app
+    cost: member                          # 花 ChatGPT 订阅额度
+    strengths: [reasoning, multimodal]
+    rank: { reasoning: 1 }
+    timeout: 120
+    enabled: false
+
+  # ---- 会员订阅档 ----
+  - id: kimi-vip
+    endpoint: http://127.0.0.1:4100/v1   # Kimi Code OAuth 会员桥（kimi_bridge.py）
+    model: kimi-for-coding
+    cost: member
+    strengths: [coding, long, agent, chat]
+    rank: { coding: 1, long: 1, chat: 2 }
+    timeout: 300
+    enabled: true
+
+  # ---- 按量 Key 档（兜底，网关 :4000，待填 MOONSHOT/ARK Key） ----
+  - id: gw-coding
+    endpoint: http://127.0.0.1:4000/v1
+    model: coding                         # 网关档位：Kimi k2.7-code / doubao-seed-evolving
+    api_key_env: LITELLM_MASTER_KEY
+    cost: metered
+    strengths: [coding]
+    rank: { coding: 2 }
+    timeout: 300
+    enabled: false
+
+  - id: gw-long
+    endpoint: http://127.0.0.1:4000/v1
+    model: long                           # 网关档位：Kimi k3 1M 上下文
+    api_key_env: LITELLM_MASTER_KEY
+    cost: metered
+    strengths: [long]
+    rank: { long: 2 }
+    timeout: 300
+    enabled: false
+
+  - id: gw-think
+    endpoint: http://127.0.0.1:4000/v1
+    model: think                          # 网关档位：深度推理兜底
+    api_key_env: LITELLM_MASTER_KEY
+    cost: metered
+    strengths: [reasoning, chat]
+    rank: { reasoning: 2, chat: 3 }
+    timeout: 300
+    enabled: false
+
+  - id: gw-cheap
+    endpoint: http://127.0.0.1:4000/v1
+    model: cheap                          # 网关档位：doubao lite 高并发便宜
+    api_key_env: LITELLM_MASTER_KEY
+    cost: metered
+    strengths: [bulk, chat]
+    rank: { bulk: 1, chat: 4 }
+    timeout: 60
+    enabled: false
+
+  # ---- 规划通道 ----
+  - id: grok-web
+    endpoint: ""
+    model: grok-web                       # 规划：照 kimi_bridge 模式接 Grok 网页版，自带 X 实时数据
+    cost: member
+    strengths: [realtime]
+    rank: { realtime: 1 }
+    timeout: 120
+    enabled: false

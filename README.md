@@ -112,8 +112,11 @@ CDP 优先（豆包同为 Electron），备选剪贴板 + WM_PASTE。目标：�
   spec_write / spec_read / spec_list），REST 同步扩展 + `/api/board`；
   kind / priority 字段已为 P4 路由预留。验证：`hub\verify_mcp.py` 12 步全过。
 
-### P4 · 能力路由：最低成本实现最高效开发
-任务板认领时按"模型优劣势 × 成本"双维路由：
+### P4 · 能力路由：最低成本实现最高效开发 —— ✅ 首期已完成
+任务按 `kind` 经"**模型优劣势 × 成本**"双维路由（`hub/routing.yaml` 通道表 +
+`hub/router.py` 引擎 + `hub/dispatcher.py` 调度守护）：
+dispatcher 轮询看板 open 任务 → 原子认领 → 按 fallback 链逐通道执行 →
+产物落 artifacts、任务进 review 走 P3 评审流（全链失败才 failed）。
 
 | 任务类型 | 首选通道 | 原因 |
 |---|---|---|
@@ -124,7 +127,9 @@ CDP 优先（豆包同为 Electron），备选剪贴板 + WM_PASTE。目标：�
 | 批量分类/摘要/格式化 | doubao lite (按量) | RPM 30000 高并发便宜 |
 | 实时热点信息 | Grok web 桥（规划） | 自带 X 实时数据 |
 
-成本优先级：**App 免费额度 > 会员订阅 > 按量 Key**；档位 fallback 链兜底可用性。
+成本优先级：**App 免费额度 > 会员订阅 > 按量 Key**；同成本按 rank 排序，
+通道掉线自动退次选，空链任务置 failed。prompt 自动拼入项目 Spec（P3）与上轮 review 反馈。
+验证：`hub\verify_router.py`（离线单测 6 断言 + doubao-app 端到端 + 空链兜底）全过。
 
 ### P5 · Skill 化交付
 把开发规范、HD-2D 管线、发布流程等沉淀为 Skill 包挂在任务上，
