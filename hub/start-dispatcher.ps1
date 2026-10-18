@@ -1,4 +1,4 @@
-# 启动 AI Hub P4 调度守护（能力路由执行器）
+﻿# 启动 AI Hub P4 调度守护（能力路由执行器）
 # 用法：在 hub 目录执行 .\start-dispatcher.ps1 [-Interval 5]
 # 依赖：复用 ai-relay\.venv；读 routing.yaml + board.db，通道走 :4100/:4301/:4000
 param([double]$Interval = 5)

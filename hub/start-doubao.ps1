@@ -1,4 +1,4 @@
-# 启动豆包 App 执行器适配桥（OpenAI 兼容，127.0.0.1:4301，P2 起 CDP 后台后端）
+﻿# 启动豆包 App 执行器适配桥（OpenAI 兼容，127.0.0.1:4301，P2 起 CDP 后台后端）
 # 用法：在 hub 目录执行 .\start-doubao.ps1（保持窗口开着）
 # 依赖：ai-relay\.venv（fastapi/uvicorn）+ 已登录的豆包桌面端
 # CDP 后端要求豆包带 --remote-debugging-port=9223 启动：本脚本自动检测，

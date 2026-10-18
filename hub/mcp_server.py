@@ -40,6 +40,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
+import console
 import dashboard
 import memory_store
 import metrics_log
@@ -431,7 +432,14 @@ class TaskIn(BaseModel):
 
 
 async def rest_create(req: Request):
-    body = await req.json()
+    """建单 REST：JSON（程序调用）或 urlencoded 表单（控制台页面提交，303 回 /）。"""
+    if "application/x-www-form-urlencoded" in (req.headers.get("content-type") or ""):
+        from urllib.parse import parse_qs
+        body = {k: v[0] for k, v in parse_qs((await req.body()).decode("utf-8", "replace")).items()}
+        form = True
+    else:
+        body = await req.json()
+        form = False
     title, ins = (body.get("title") or "").strip(), (body.get("instructions") or "").strip()
     if not title or not ins:
         return JSONResponse(status_code=400, content={"error": "title / instructions 必填"})
@@ -444,6 +452,9 @@ async def rest_create(req: Request):
                      output_dir=body.get("output_dir") or "")
     if not r["ok"]:
         return JSONResponse(status_code=400, content={"error": r["msg"]})
+    if form:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/", status_code=303)
     return JSONResponse({"id": r["id"], "status": r["status"]})
 
 
@@ -504,6 +515,11 @@ async def dashboard_page(req: Request):
     return HTMLResponse(dashboard.render(dashboard.collect()))
 
 
+async def console_page(req: Request):
+    """统一控制台：服务体检 + 快捷建单 + 看板 + 观测摘要 + 工作舱。"""
+    return HTMLResponse(console.render(console.collect()))
+
+
 # ---------------- 组合应用：/mcp + /sse + /api ----------------
 http_app = mcp.streamable_http_app()   # 内部路由：/mcp
 sse_app = mcp.sse_app()                # 内部路由：/sse + /messages/
@@ -515,6 +531,7 @@ routes = list(http_app.routes) + list(sse_app.routes) + [
     Route("/api/board", rest_board, methods=["GET"]),
     Route("/api/metrics", rest_metrics_post, methods=["POST"]),
     Route("/dashboard", dashboard_page, methods=["GET"]),
+    Route("/", console_page, methods=["GET"]),
     Route("/healthz", healthz, methods=["GET"]),
 ]
 

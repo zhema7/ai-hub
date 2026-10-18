@@ -1,4 +1,4 @@
-# 启动 AI Hub MCP Server Facade（127.0.0.1:4300）
+﻿# 启动 AI Hub MCP Server Facade（127.0.0.1:4300）
 # 用法：在 hub 目录执行 .\start-mcp.ps1
 # 依赖：hub\.venv（mcp<2 独立环境——LiteLLM 要 mcp 2.x，与 ai-relay venv 互斥，故独立）
 $ErrorActionPreference = "Stop"

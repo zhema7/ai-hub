@@ -1,4 +1,4 @@
-# 启动 AI Hub ChatGPT App 通道（CDP 9222 + OpenAI 兼容桥 4302）
+﻿# 启动 AI Hub ChatGPT App 通道（CDP 9222 + OpenAI 兼容桥 4302）
 # 用法：在 hub 目录执行 .\start-chatgpt.ps1
 # 前提：ChatGPT 桌面端（MSIX: OpenAI.Codex）须带 --remote-debugging-port=9222 启动。
 #       本脚本自动检测：9222 已开 → 直接起桥；没开 → 重启 ChatGPT 带参拉起。
