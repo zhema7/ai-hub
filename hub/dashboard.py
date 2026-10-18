@@ -79,15 +79,18 @@ def collect(db=DB, now: float | None = None) -> dict:
             c["model"] = cost.channel_label(c["channel"])
         d["costs"] = cost_rows
 
-        # 2c) 订阅额度消耗（member 档：等效按量价值 / 年费，看已用多少订阅价值）
+        # 2c) 订阅额度消耗（把已用等效价值 / 订阅年费，看是否用回本）
         subs = {}
         for c in cost_rows:
             sub = cost.subscription(c["channel"])
-            if sub and c["saved"] > 0:
-                subs[c["channel"]] = {"model": sub["model"], "sub_cny": sub["cny"],
-                                      "sub_usd": sub["usd"],
-                                      "used_cny": c["saved"] * cost.USD_CNY,
-                                      "pct": min(100.0, c["saved"] * cost.USD_CNY / sub["cny"] * 100)}
+            if sub and sub.get("cny", 0) > 0 and c["saved"] > 0:
+                used_cny = c["saved"] * cost.USD_CNY
+                subs[c["channel"]] = {"model": sub["model"],
+                                      "plan": sub.get("plan"), "label": sub.get("label"),
+                                      "sub_cny": sub["cny"], "sub_usd": sub.get("usd", 0),
+                                      "used_cny": used_cny,
+                                      "pct": min(100.0, used_cny / sub["cny"] * 100),
+                                      "detected_at": sub.get("detected_at")}
         d["subscriptions"] = subs
 
         # 3) 数据源心跳（gateway / bridge / board / 任意上报方）
@@ -272,17 +275,21 @@ def render(d: dict) -> str:
 
     # 订阅额度消耗表
     if d["subscriptions"]:
-        sub_rows = "".join(
-            f'<tr><td>{e(ch)}</td><td>{e(v["model"])}</td>'
-            f'<td class="num">¥{v["sub_cny"]:,}/年</td>'
-            f'<td class="num">¥{v["used_cny"]:.2f}</td>'
-            f'<td><div class="bar"><span style="width:{v["pct"]:.1f}%;background:var(--mem)"></span></div>'
-            f'<div class="muted" style="font-size:11px">{v["pct"]:.1f}% 订阅价值</div></td></tr>'
-            for ch, v in d["subscriptions"].items())
+        sub_rows = []
+        for ch, v in d["subscriptions"].items():
+            pill = f' <span class="pill">{e(v["label"])}</span>' if v.get("label") else ""
+            plan = f'（{e(v["plan"])}）' if v.get("plan") else ""
+            sub_rows.append(
+                f'<tr><td>{e(ch)}{pill}</td>'
+                f'<td>{e(v["model"])}</td>'
+                f'<td class="num">¥{v["sub_cny"]:,}/年</td>'
+                f'<td class="num">¥{v["used_cny"]:.2f}</td>'
+                f'<td><div class="bar"><span style="width:{v["pct"]:.1f}%;background:var(--mem)"></span></div>'
+                f'<div class="muted" style="font-size:11px">{v["pct"]:.2f}% 订阅价值{plan}</div></td></tr>')
         sub_html = ('<table><tr><th>订阅通道</th><th>等效模型</th><th class="num">年费</th>'
-                    '<th class="num">已用价值</th><th>额度消耗</th></tr>' + sub_rows + '</table>')
+                    '<th class="num">已用价值</th><th>额度消耗</th></tr>' + "".join(sub_rows) + '</table>')
     else:
-        sub_html = '<div class="empty">暂无会员通道调用（Kimi Code / ChatGPT 订阅）</div>'
+        sub_html = '<div class="empty">暂无会员通道调用（Kimi Code / ChatGPT / 豆包 订阅）</div>'
 
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
     return f"""<!doctype html><html lang="zh"><head><meta charset="utf-8">

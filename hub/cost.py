@@ -91,7 +91,18 @@ def to_usd(cny: float) -> float:
 
 
 def subscription(channel: str) -> dict | None:
-    """member 档订阅信息（用于展示订阅额度消耗，非逐调用扣费）。"""
+    """member 档订阅信息：优先读 subscription.py 探测缓存（用户真实计划），
+    探测不到回退 RATES 硬编码。返回 {cny, usd, model, plan?, label?}。"""
+    try:
+        import subscription as _sub
+        rec = _sub.get(channel)
+        if rec and rec.get("cny") is not None:
+            return {"cny": rec["cny"], "usd": rec.get("usd", 0),
+                    "model": info(channel).get("model", ""),
+                    "plan": rec.get("plan"), "label": rec.get("label"),
+                    "detected_at": rec.get("detected_at")}
+    except Exception:
+        pass
     r = info(channel)
     if r.get("type") == "member" and "sub_cny" in r:
         return {"cny": r["sub_cny"], "usd": r["sub_usd"], "model": r.get("model", "")}
