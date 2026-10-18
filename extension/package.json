@@ -4,6 +4,7 @@
   "description": "AI Hub 共享任务板的 TraeCode/VS Code 接入插件：一键写入 MCP 配置、监控本地服务状态、打开看板。任何 AI 客户端装上即可认领/交付/评审任务，配合 Dispatcher 自动路由到豆包/ChatGPT/Kimi 通道。",
   "version": "0.1.0",
   "publisher": "zhema7",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },

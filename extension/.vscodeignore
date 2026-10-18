@@ -1,0 +1,7 @@
+.vscode/**
+src/**
+node_modules/**
+.gitignore
+make_icon.ps1
+publish.ps1
+*.vsix
