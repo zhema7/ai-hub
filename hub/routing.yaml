@@ -19,6 +19,15 @@ channels:
     timeout: 120                          # GUI 单轮 25-40s，留足余量
     enabled: true
 
+  - id: workbuddy-app
+    endpoint: http://127.0.0.1:4303/v1   # WorkBuddy 桌面 App 桥（CDP 驱动，花套餐/免费积分）
+    model: workbuddy-app
+    cost: free_app
+    strengths: [long, writing, chat]
+    rank: { long: 1, writing: 2, chat: 2 }
+    timeout: 420                          # 任务型 Agent，单轮可能较长
+    enabled: true
+
   - id: chatgpt-app
     endpoint: http://127.0.0.1:4302/v1   # ChatGPT 桌面 App 桥（CDP 驱动，P1 已上线）
     model: chatgpt-app
