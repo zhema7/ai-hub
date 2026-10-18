@@ -5,7 +5,7 @@ description: 接入 AI Hub 共享任务板进行多智能体协作。当需要�
 
 # AI Hub 多智能体协作
 
-AI Hub 把"任务即数据"落到本地：看板账本在 SQLite（hub/data/board.db），产物在 hub/data/artifacts/，换端/换智能体/换机器任务现场不丢。你作为协作智能体，通过 MCP 任务板认领和交付任务。
+AI Hub 把"任务即数据"落到本地：看板账本在 SQLite（hub/data/board.db），产物在 hub/data/artifacts/，项目记忆在 hub/data/workspaces/<project>/（工作舱）。换端/换智能体/换机器任务现场不丢。你作为协作智能体，通过 MCP 任务板认领和交付任务。
 
 ## 接入
 
@@ -47,6 +47,15 @@ MCP 服务 `ai-hub-board`（127.0.0.1:4300），二选一写入客户端 MCP 配
 ## 评审职责
 
 你是 reviewer 时用 `task_review(task_id, approve, feedback)`：通过 → `done`；打回 → 自动退回 `doing` 并附 feedback，原认领者返工。评审先看产物（`artifact_list` / `artifact_read`）再裁决，不要只看 result_summary。
+
+## 工作舱记忆（项目上下文不丢）
+
+一个 `project` = 一个**工作舱** `hub/data/workspaces/<project>/`（`spec/` + `memory.db` + `skills/`），跨客户端、跨机器、跨会话共享。干活前除 `spec_read` 外，先 `memory_read(project, query)` 召回相关上下文：
+
+- 记忆分三层：`core`（项目铁律/技术栈/约束，随任务常驻注入）、`decision`（"为什么选 A 不选 B"、评审打回结论）、`episodic`（交付摘要、踩过的坑）。
+- 有价值的结论用 `memory_write(project, layer, content, tags, key)` 沉淀：`core` 传 `key` 可同名覆盖，`decision`/`episodic` 追加。写错了用 `memory_list` + `memory_forget(id)` 清理。
+- Dispatcher 会自动记：交付成功写 `episodic`，`task_review` 打回写 `decision`，通过则把该单 `episodic` 标记 verified——流水账不用你手动记，但**项目铁律/重要决策要主动写** `core`/`decision`。
+- 用量与效果看板：`http://127.0.0.1:4300/dashboard`（通道调用/成功率/平均延迟/限流命中/返工率/客户端/工作舱）。
 
 ## 注意
 
