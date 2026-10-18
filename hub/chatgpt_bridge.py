@@ -13,10 +13,25 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from chatgpt_executor import ChatGPTError, ask
+import asyncio
+import json
+import time
+import uuid
+
+import metrics_log
 
 MODEL = "chatgpt-app"
+COST_CLASS = "member"
+_LIMIT_HINT = ("限流", "已用完", "速率", "rate limit", "too many", "quota")
 app = FastAPI()
 _lock = asyncio.Lock()          # CDP 页面单实例，所有请求串行
+
+
+def _note(e, ok=True) -> str:
+    """区分限流命中与普通失败（看板额度水位靠 note 前缀聚合）。"""
+    s = str(e)
+    low = s.lower()
+    return ("limit: " if any(k in low for k in _LIMIT_HINT) else "error: ") + s[:100]
 
 
 def _flatten(messages: list) -> str:
@@ -71,10 +86,17 @@ async def chat(req: Request):
     timeout = int(body.get("timeout", 300)) if str(body.get("timeout", "")).isdigit() else 300
 
     async with _lock:
+        t0 = time.time()
         try:
             text = await asyncio.to_thread(ask, prompt, timeout)
         except ChatGPTError as e:
+            metrics_log.record(source="bridge", channel=MODEL, ok=0,
+                               latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
+                               cost_class=COST_CLASS, note=_note(e))
             return JSONResponse(status_code=502, content={"error": {"message": f"chatgpt bridge: {e}"}})
+    metrics_log.record(source="bridge", channel=MODEL, ok=1,
+                       latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
+                       answer_chars=len(text), cost_class=COST_CLASS, note="ok")
 
     if body.get("stream"):  # 简化流式：整段一次性吐出
         cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"

@@ -14,12 +14,18 @@
 #   POST/GET /mcp   Streamable HTTP（Trae IDE 等现代客户端）
 #   GET      /sse   旧版 HTTP+SSE（WorkBuddy 自定义连接器 type=sse）
 #   POST     /messages/  SSE 上行通道
-# 附带 REST（Hub 侧建单/查单/看板）：
-#   POST /api/tasks {title, instructions, project?, parent_id?, depends_on?, priority?, kind?}
+# 附带 REST（Hub 侧建单/查单/看板/指标/观测）：
+#   POST /api/tasks {title, instructions, project?, parent_id?, depends_on?, priority?, kind?, output_dir?}
 #   GET  /api/tasks[/id]     GET /api/board?project=     GET /healthz
+#   POST /api/metrics {source,...}   任意客户端自报用量（也接受数组）
+#   GET  /dashboard                 用量与效果看板（统一指标表 + 任务 + 工作舱记忆，30s 自刷新）
 #
-# 启动：.\start-mcp.ps1（复用 ai-relay\.venv，mcp<2）
+# P7 工作舱记忆工具：memory_write / memory_read / memory_list / memory_forget
+#   （每项目一个 workspaces/<project>/memory.db，SQLite FTS5 中文子串检索，跨客户端共享）
+#
+# 启动：.\start-mcp.ps1（hub\.venv，mcp<2——与 ai-relay 的 mcp 2.x 互斥）
 import json
+import shutil
 import sqlite3
 import threading
 import time
@@ -31,13 +37,17 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
+
+import dashboard
+import memory_store
+import metrics_log
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 ARTS = DATA / "artifacts"
-SPECS = ARTS / "_specs"
+SPECS_LEGACY = ARTS / "_specs"      # P3 旧 Spec 位置（读兜底 + 一次性迁移到工作舱）
 ARTS.mkdir(parents=True, exist_ok=True)
 DB = DATA / "board.db"
 
@@ -79,7 +89,32 @@ def _migrate():
     _conn.commit()
 
 
+def _migrate_metrics():
+    """P6：统一指标表（就地迁移，看板只读这一张 + tasks）。"""
+    metrics_log.ensure(_conn)
+    _conn.commit()
+
+
+def _migrate_specs():
+    """P7：P3 旧 _specs/<project>/*.md → 工作舱 workspaces/<project>/spec/（一次性，旧库无损）。"""
+    if not SPECS_LEGACY.is_dir():
+        return
+    for pdir in SPECS_LEGACY.iterdir():
+        if not pdir.is_dir():
+            continue
+        dst = memory_store.spec_dir(pdir.name)
+        for f in pdir.glob("*.md"):
+            t = dst / f.name
+            if not t.exists():
+                try:
+                    shutil.copy2(f, t)
+                except Exception as e:
+                    print(f"[spec-migrate] {f} -> {t} 失败: {e}")
+
+
 _migrate()
+_migrate_metrics()
+_migrate_specs()
 
 
 def db(sql: str, args=(), one=False):
@@ -155,6 +190,8 @@ mcp = FastMCP(
         "干活前 spec_read 读项目文档对齐上下文 → artifact_write 落产物 → "
         "task_report review 交付待审 → 由 review 方 task_review 通过(done)或打回(doing, 带 feedback)。"
         "产物一律走 artifact_write 落盘回传引用，不要只把长文本塞进回话里。"
+        "项目上下文走工作舱记忆：干活前 memory_read 召回核心/决策/情节记忆，重要结论用 memory_write 沉淀"
+        "（core 常驻注入 / decision 决策与打回结论 / episodic 交付与踩坑）；用量与效果见 GET /dashboard。"
     ),
     host="127.0.0.1",
     port=4300,
@@ -247,19 +284,30 @@ def task_report(task_id: str, status: str, result_summary: str = "", error: str 
 @mcp.tool()
 def task_review(task_id: str, approve: bool, feedback: str = "", reviewer: str = "") -> dict:
     """评审一个 review 状态的任务。approve=True → done（并解锁下游依赖）；
-    approve=False → 打回 doing，feedback 回流给认领人返工。"""
-    row = db("SELECT status FROM tasks WHERE id=?", (task_id,), one=True)
+    approve=False → 打回 doing，feedback 回流给认领人返工。
+    P7：打回结论自动沉淀为决策记忆，通过则把该单情节记忆标记 verified。"""
+    row = db("SELECT status, project, title FROM tasks WHERE id=?", (task_id,), one=True)
     if not row:
         return {"ok": False, "msg": f"任务 {task_id} 不存在"}
     if row["status"] != "review":
         return {"ok": False, "msg": f"任务当前状态 {row['status']}，仅 review 状态可评审"}
+    project = row["project"] or "default"
     if approve:
         db("UPDATE tasks SET status='done', feedback=?, updated_at=? WHERE id=?",
            (feedback, time.time(), task_id))
         _refresh_blocks()
+        try:
+            memory_store.mark_verified(project, task_id)
+        except Exception as e:
+            print(f"[memory] mark_verified 失败（忽略）: {e}")
         return {"ok": True, "task_id": task_id, "status": "done"}
     db("UPDATE tasks SET status='doing', feedback=?, updated_at=? WHERE id=?",
        (f"[review by {reviewer or 'anonymous'}] {feedback}", time.time(), task_id))
+    try:
+        memory_store.write(project, "decision", f"打回「{row['title']}」：{feedback}",
+                           tags=f"task={task_id} reviewer={reviewer or '-'}", task_id=task_id)
+    except Exception as e:
+        print(f"[memory] decision 写入失败（忽略）: {e}")
     return {"ok": True, "task_id": task_id, "status": "doing", "msg": "已打回返工"}
 
 
@@ -299,10 +347,9 @@ def artifact_list(task_id: str = "") -> dict:
 @mcp.tool()
 def spec_write(project: str, name: str, content: str, note: str = "") -> dict:
     """写项目级 Spec/设计文档（PRD、架构约定、接口契约等），供该项目下所有智能体 spec_read 对齐上下文。
-    同名覆盖即更新版本。"""
+    同名覆盖即更新版本。P7 起 Spec 落在项目工作舱 workspaces/<project>/spec/ 内。"""
     name = _safe_name(name)
-    pdir = SPECS / _safe_name(project or "default")
-    pdir.mkdir(parents=True, exist_ok=True)
+    pdir = memory_store.spec_dir(project)
     path = pdir / name
     path.write_text(content, encoding="utf-8")
     db("INSERT INTO artifacts (task_id,name,path,note,created_at) VALUES (?,?,?,?,?)",
@@ -314,9 +361,13 @@ def spec_write(project: str, name: str, content: str, note: str = "") -> dict:
 def spec_read(project: str, name: str) -> dict:
     """读项目级 Spec 文档。认领任务后先读它再干活。"""
     name = _safe_name(name)
-    path = SPECS / _safe_name(project or "default") / name
-    if not path.exists():
-        return {"ok": False, "msg": f"项目 {project} 的 Spec {name} 不存在，可先 spec_list 查看"}
+    path = memory_store.spec_dir(project, create=False) / name
+    if not path.exists():      # 兼容 P3 旧位置（未迁移/历史记录）
+        legacy = SPECS_LEGACY / memory_store.workspace_dir(project, create=False).name / name
+        if legacy.exists():
+            path = legacy
+        else:
+            return {"ok": False, "msg": f"项目 {project} 的 Spec {name} 不存在，可先 spec_list 查看"}
     return {"ok": True, "project": project, "name": name,
             "content": path.read_text(encoding="utf-8", errors="replace")}
 
@@ -341,7 +392,39 @@ def task_get(task_id: str) -> dict:
     return {"ok": True, "task": _task_full(row)}
 
 
-# ---------------- REST（Hub 侧建单/查单/看板） ----------------
+# ---------------- P7 工作舱记忆工具（跨客户端/跨会话上下文不丢） ----------------
+@mcp.tool()
+def memory_write(project: str, layer: str, content: str, tags: str = "", key: str = "") -> dict:
+    """写工作舱记忆，供该项目下所有智能体后续任务自动召回。
+    layer：core（核心事实/铁律/技术栈——每次任务都注入，key 同名覆盖）/
+           decision（决策："为什么选 A 不选 B"、评审结论——按 kind/关键词召回）/
+           episodic（情节：交付摘要、踩过的坑——FTS5 top-k 召回）。
+    换客户端/换机器/换会话，只要 hub/data/workspaces 在，记忆就在。"""
+    return memory_store.write(project, layer, content, tags=tags, key=key)
+
+
+@mcp.tool()
+def memory_read(project: str, query: str = "", layer: str = "", limit: int = 5) -> dict:
+    """检索工作舱记忆（SQLite FTS5，中文子串友好）。query 为空则按 layer 列最近记忆。"""
+    rows = (memory_store.search(project, query, layer, limit) if (query or "").strip()
+            else memory_store.list_layer(project, layer)[:limit])
+    return {"ok": True, "project": project, "query": query, "count": len(rows), "memory": rows}
+
+
+@mcp.tool()
+def memory_list(project: str, layer: str = "") -> dict:
+    """列出某工作舱全部记忆（layer 留空则列 core/decision/episodic 三层）。"""
+    rows = memory_store.list_layer(project, layer)
+    return {"ok": True, "project": project, "layer": layer or "*", "count": len(rows), "memory": rows}
+
+
+@mcp.tool()
+def memory_forget(project: str, id: int) -> dict:
+    """删除一条记忆（记忆要可查可改，对齐 PilotDeck 主张）。"""
+    return memory_store.forget(project, id)
+
+
+# ---------------- REST（Hub 侧建单/查单/看板/指标摄入/观测看板） ----------------
 class TaskIn(BaseModel):
     title: str
     instructions: str
@@ -398,6 +481,29 @@ async def healthz(req: Request):
     return JSONResponse({"ok": True, "open_tasks": n})
 
 
+async def rest_metrics_post(req: Request):
+    """任意客户端自报用量（网关 / Codex CLI / 自定义脚本），body 为单对象或数组。
+    字段同 metrics 表：source(必填)、channel、kind、project、task_id、ok、latency_ms、
+    prompt_chars、answer_chars、est_tokens、cost_class、cost_usd、note。"""
+    body = await req.json()
+    items = body if isinstance(body, list) else [body]
+    allowed = set(metrics_log.FIELDS)
+    n = 0
+    with _lock:
+        for it in items:
+            if not isinstance(it, dict) or not str(it.get("source") or "").strip():
+                continue
+            metrics_log.log(_conn, **{k: it[k] for k in it if k in allowed})
+            n += 1
+        _conn.commit()
+    return JSONResponse({"ok": True, "ingested": n})
+
+
+async def dashboard_page(req: Request):
+    """用量与效果看板：统一指标表（通道/延迟/字符/限流）+ 任务漏斗 + 客户端 + 工作舱记忆。"""
+    return HTMLResponse(dashboard.render(dashboard.collect()))
+
+
 # ---------------- 组合应用：/mcp + /sse + /api ----------------
 http_app = mcp.streamable_http_app()   # 内部路由：/mcp
 sse_app = mcp.sse_app()                # 内部路由：/sse + /messages/
@@ -407,6 +513,8 @@ routes = list(http_app.routes) + list(sse_app.routes) + [
     Route("/api/tasks", rest_list, methods=["GET"]),
     Route("/api/tasks/{tid}", rest_get, methods=["GET"]),
     Route("/api/board", rest_board, methods=["GET"]),
+    Route("/api/metrics", rest_metrics_post, methods=["POST"]),
+    Route("/dashboard", dashboard_page, methods=["GET"]),
     Route("/healthz", healthz, methods=["GET"]),
 ]
 

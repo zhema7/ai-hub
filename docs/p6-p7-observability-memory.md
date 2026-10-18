@@ -3,6 +3,11 @@
 > 目标：让「用哪些客户端、走了哪些通道、花了多少额度、效果如何」全部可见；
 > 让「做项目时的 Spec / 决策 / 上下文」跨客户端、跨机器、跨会话不丢。
 > 参考 2026 年近期开源项目的成熟范式，但坚持零云依赖、本地优先。
+>
+> **实现状态（2026-10-18）：P6a/P6b/P6d + P7a/P7b 已全部落地并验证通过**
+> （`hub/metrics_log.py`、`hub/dashboard.py`、`hub/memory_store.py`；桥与 dispatcher 已埋点；
+> MCP 板新增 `/dashboard` + `POST /api/metrics` + 4 个记忆工具；`hub/verify_metrics.py` ALL PASS）。
+> P6c（LiteLLM 原生 `/ui` 用量页）按设计保持可选、默认不开。
 
 ---
 

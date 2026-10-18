@@ -181,6 +181,28 @@ dispatcher 轮询看板 open 任务 → 原子认领 → 按 fallback 链逐通�
 环境解耦：MCP 板用独立 `hub/.venv`（mcp<2），与网关 venv（mcp 2.x）彻底解互斥。
 后续：HD-2D 管线、发布流程等领域 Skill 挂任务自动加载（方向不变）。
 
+### P6 · 观测层：用量与效果看板 —— ✅ 已完成
+三层数据源写同一张 `metrics` 表（`source = gateway / bridge / board`），看板只读它 + tasks：
+- **桥层埋点**：豆包 / ChatGPT 桥每次调用记延迟、字符数、限流命中（`note = limit…`）；
+- **调度埋点**：dispatcher 交付 / 失败记通道、kind、延迟、字符、成本档；
+- **任意客户端可自报**：`POST /api/metrics`（网关 / Codex CLI / 自定义脚本都能接，单对象或数组）。
+
+看板 **`http://127.0.0.1:4300/dashboard`**（零依赖服务端 HTML，30s 自刷新）：
+近 24h 省下的按量成本（est.）、通道热力（调用 / 成功率 / 均延迟 / 限流）、任务漏斗 + 返工率、
+客户端用量、工作舱记忆概览。App 通道无真 token 概念 → 一律标注 est.（字符 / 2 估算），不伪装精确值。
+
+### P7 · 记忆层：项目上下文不丢 —— ✅ 已完成
+一个 project = 一个**工作舱** `hub/data/workspaces/<project>/{spec,artifacts,skills,memory.db}`；
+换客户端 / 换机器 / 换会话，只要 `hub/data/` 在，现场全在（对齐清华 PilotDeck WorkSpace 模型）。
+- **记忆分层**（对齐 Letta）：`core` 核心事实（每次任务常驻注入）/ `decision` 决策与打回结论 / `episodic` 交付与踩坑；
+- **MCP 工具**：`memory_write / memory_read / memory_list / memory_forget`——每项目一个 SQLite，
+  FTS5 检索（中文按二元组切分，任意长度子串可命中），**跨客户端共享**；
+- **自动写入**（不靠人手动记）：dispatcher 交付成功自动记 episodic；review 打回自动记 decision，
+  通过则标记 verified（权重更高，召回更靠前）；
+- **自动注入**：`dispatcher.build_prompt` 顺序 = 工作舱 → 核心记忆 → 相关记忆(FTS5 top-k) → 项目 Spec → 任务 → 上轮反馈。
+P3 旧 `_specs/` 已一次性并入工作舱 `spec/`（旧库无损，读路径保留兜底）。
+设计出处见 `docs/p6-p7-observability-memory.md`。
+
 ## 快速开始
 
 ```powershell
@@ -199,8 +221,9 @@ copy ai-relay\.env.example ai-relay\.env   # 填 MOONSHOT_API_KEY / ARK_API_KEY
 # 5. 可选：ChatGPT App 通道（:4302，需已登录的 ChatGPT 桌面端）
 .\hub\start-chatgpt.ps1
 
-# 6. 可选：任务板 MCP（:4300）
+# 6. 可选：任务板 MCP（:4300）+ 工作舱记忆 + 观测看板
 .\hub\start-mcp.ps1
+#    看板：http://127.0.0.1:4300/dashboard（通道用量/延迟/限流/返工率/客户端/工作舱）
 ```
 
 下游客户端配置片段见 `ai-relay/clients/`（Codex CLI）与 `hub/clients/`（Trae / WorkBuddy MCP）。
@@ -226,8 +249,12 @@ IDE 自带模型积分同理：在 Trae 设置 → 模型 → 添加自定义模
 
 ## 已完成里程碑
 
-- **P1 ChatGPT 桌面通道 / P2 豆包后台化 / P3 看板协作 / P4 能力路由 / P5 Skill 化交付 全部上线**，
-  详见下方路线图各节的技术细节。
+- **P1 ChatGPT 桌面通道 / P2 豆包后台化 / P3 看板协作 / P4 能力路由 / P5 Skill 化交付 /
+  P6 观测看板 / P7 工作舱记忆 全部上线**，详见上方路线图各节的技术细节。
+- **观测看板**（`http://127.0.0.1:4300/dashboard`）：任意客户端 `POST /api/metrics` 自报用量，
+  桥与调度自动埋点——通道用量 / 成功率 / 平均延迟 / 限流命中 / 返工率一屏可见。
+- **工作舱记忆**（`hub/data/workspaces/`）：4 个 MCP 记忆工具 + 交付/打回自动沉淀 + prompt 自动注入，
+  项目上下文跨客户端、跨机器、跨会话不丢。
 - **TraeCode/VS Code 扩展**（`extension/ai-hub-collab-0.1.0.vsix`）：状态栏任务监控、
   一键写 MCP 配置、服务体检——Install from VSIX 即装即用。
 - **Trae 一键接入链接**（免装扩展）：浏览器地址栏粘贴
