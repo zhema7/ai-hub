@@ -1,0 +1,72 @@
+{
+  "name": "ai-hub-collab",
+  "displayName": "AI Hub Collab - 多智能体协作任务板",
+  "description": "AI Hub 共享任务板的 TraeCode/VS Code 接入插件：一键写入 MCP 配置、监控本地服务状态、打开看板。任何 AI 客户端装上即可认领/交付/评审任务，配合 Dispatcher 自动路由到豆包/ChatGPT/Kimi 通道。",
+  "version": "0.1.0",
+  "publisher": "zhema7",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "AI"
+  ],
+  "keywords": [
+    "ai-hub",
+    "mcp",
+    "multi-agent",
+    "task board",
+    "claude",
+    "kimi",
+    "doubao",
+    "chatgpt"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiHub.checkStatus",
+        "title": "AI Hub: 检查服务状态",
+        "category": "AI Hub"
+      },
+      {
+        "command": "aiHub.writeWorkspaceMcp",
+        "title": "AI Hub: 写入当前项目的 MCP 配置",
+        "category": "AI Hub"
+      },
+      {
+        "command": "aiHub.startBoard",
+        "title": "AI Hub: 启动任务板服务",
+        "category": "AI Hub"
+      },
+      {
+        "command": "aiHub.openBoard",
+        "title": "AI Hub: 打开任务板 (REST)",
+        "category": "AI Hub"
+      }
+    ],
+    "configuration": {
+      "title": "AI Hub Collab",
+      "properties": {
+        "aiHub.boardUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4300",
+          "description": "AI Hub MCP 任务板地址（4300）"
+        },
+        "aiHub.hubRoot": {
+          "type": "string",
+          "default": "",
+          "description": "本地 ai-hub 仓库根目录（用于一键启动服务；留空则禁用启动命令）"
+        }
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhema7/ai-hub"
+  },
+  "license": "MIT"
+}
