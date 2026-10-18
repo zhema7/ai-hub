@@ -9,6 +9,7 @@
 from doubao_executor_cdp import DoubaoError, ask
 import asyncio
 import json
+import re
 import time
 import uuid
 
@@ -50,6 +51,17 @@ def _flatten(messages: list) -> str:
     return "\n\n".join(parts)
 
 
+_TAIL_PAT = re.compile(r"^(如果|若|如需|要不要|希望以上|我可以|您?需要|当然|另外)[，,]?(你|您)?(还)?(需要|想|要)")
+
+
+def _strip_tail(text: str) -> str:
+    """剥掉豆包回复末尾的对话式提议行（"如果你需要，我可以…"），从尾往回剔。"""
+    lines = (text or "").rstrip().splitlines()
+    while lines and (not lines[-1].strip() or _TAIL_PAT.search(lines[-1].strip())):
+        lines.pop()
+    return "\n".join(lines).rstrip()
+
+
 def _completion(text: str) -> dict:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -85,7 +97,7 @@ async def chat(req: Request):
     async with _lock:
         t0 = time.time()
         try:
-            text = await asyncio.to_thread(ask, prompt, timeout)
+            text = _strip_tail(await asyncio.to_thread(ask, prompt, timeout))
         except DoubaoError as e:
             metrics_log.record(source="bridge", channel=MODEL, ok=0,
                                latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),

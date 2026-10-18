@@ -70,9 +70,35 @@ def claim_next(conn, project: str = "") -> sqlite3.Row | None:
     return None
 
 
-def build_prompt(task: sqlite3.Row) -> str:
+def _dep_blocks(conn, task: sqlite3.Row) -> list[str]:
+    """收集前序任务（depends_on / parent_id，已 done）的交付产物全文，供下游延续。"""
+    dep_ids: list[str] = []
+    try:
+        dep_ids += [d for d in json.loads(task["depends_on"] or "[]") if isinstance(d, str)]
+    except Exception:
+        pass
+    if task["parent_id"]:
+        dep_ids.append(task["parent_id"])
+    if not dep_ids:
+        return []
+    q = f"SELECT id, title, status FROM tasks WHERE id IN ({','.join('?' * len(dep_ids))})"
+    blocks = []
+    for d in conn.execute(q, dep_ids).fetchall():
+        if d["status"] != "done":
+            continue
+        art = conn.execute(
+            "SELECT path FROM artifacts WHERE task_id=? AND name='result.md' "
+            "ORDER BY created_at DESC LIMIT 1", (d["id"],)).fetchone()
+        if art and Path(art["path"]).is_file():
+            txt = Path(art["path"]).read_text(encoding="utf-8", errors="replace")[:4000]
+            if txt.strip():
+                blocks.append(f"--- 前序任务「{d['title']}」({d['id']}) 产物 ---\n{txt}")
+    return blocks
+
+
+def build_prompt(conn, task: sqlite3.Row) -> str:
     """P7 注入顺序：工作舱 → 核心记忆（常驻）→ 相关记忆（FTS5 top-k）→
-    项目 Spec → 任务 → 上轮 review 反馈。"""
+    项目 Spec → 前序任务产物（depends_on/parent_id）→ 任务 → 上轮 review 反馈。"""
     project = task["project"] or "default"
     parts = [f"[工作舱] 项目 {project}"]
     try:
@@ -89,9 +115,19 @@ def build_prompt(task: sqlite3.Row) -> str:
         for sp in specs:
             parts.append(f"--- {sp.name} ---\n{sp.read_text(encoding='utf-8', errors='replace')}")
         parts.append("[Spec 结束，请严格遵循]")
+    try:
+        deps = _dep_blocks(conn, task)
+    except Exception as e:
+        deps = []
+        print(f"[deps] 前序产物注入失败（忽略）: {type(e).__name__}: {e}")
+    if deps:
+        parts.append("[前序任务产物，请在其基础上延续]\n" + "\n\n".join(deps))
     parts.append(f"[任务] {task['title']}\n{task['instructions']}")
     if task["feedback"]:
         parts.append(f"[上一轮 review 反馈，请针对性修改] {task['feedback']}")
+    # GUI 通道（chatgpt 画布 / doubao 对话尾巴 / workbuddy 工具倾向）统一兜底
+    parts.append("[输出要求] 请将完整产出直接写在回复正文：不要使用画布/附件/文件功能，"
+                 "不要调用工具或创建文档，末尾不要附对话式提议（如“如果你需要…”）。")
     return "\n\n".join(parts)
 
 
@@ -185,7 +221,7 @@ def run_once(dry_run: bool = False, project: str = "") -> int:
             if not chain:
                 finish(conn, task, False, error="无可用通道（全部未启用或离线）")
                 continue
-            prompt = build_prompt(task)
+            prompt = build_prompt(conn, task)
             t0 = time.time()
             if dry_run:
                 finish(conn, task, False, error="dry-run：仅验证路由决策", prompt_chars=len(prompt))

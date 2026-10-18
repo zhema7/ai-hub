@@ -91,7 +91,9 @@ JS_REPLY_STATE = r"""
 (() => {
   const vis = e => e.getBoundingClientRect().width > 0;
   const mds = [...document.querySelectorAll('.cr-markdown')].filter(vis)
-    .map(e => (e.innerText || '').trim()).filter(Boolean);
+    .map(e => { const c = e.cloneNode(true);
+      c.querySelectorAll('button, [role="button"], [contenteditable]').forEach(b => b.remove());
+      return (c.innerText || '').trim(); }).filter(Boolean);
   const stop = [...document.querySelectorAll('button')].some(b =>
     /停止|stop/i.test((b.getAttribute('aria-label') || '') + (b.innerText || '')) && vis(b));
   return {mds, stop};
