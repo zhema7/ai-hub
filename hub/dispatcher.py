@@ -110,16 +110,30 @@ def execute(prompt: str, chain: list[dict]) -> tuple[str, dict]:
     raise RuntimeError("全链路失败 | " + " ; ".join(errors))
 
 
-def finish(conn, task_id: str, ok: bool, answer: str = "", ch: dict | None = None, error: str = ""):
+def finish(conn, task_id: str, ok: bool, answer: str = "", ch: dict | None = None, error: str = "",
+           output_dir: str = ""):
     if ok:
         tdir = ARTS / task_id
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "result.md").write_text(answer, encoding="utf-8")
+        # 产物直落：output_dir 非空时把结果复制进指定目录（如 Trae 项目文件夹）
+        delivered = str(tdir / "result.md")
+        if output_dir:
+            try:
+                odir = Path(output_dir)
+                odir.mkdir(parents=True, exist_ok=True)
+                dest = odir / f"aihub-{task_id}.md"
+                dest.write_text(answer, encoding="utf-8")
+                delivered = str(dest)
+            except Exception as e:
+                print(f"[output_dir] 复制失败 {task_id}: {e}")
         conn.execute("INSERT INTO artifacts (task_id,name,path,note,created_at) VALUES (?,?,?,?,?)",
                      (task_id, "result.md", str(tdir / "result.md"),
-                      f"auto-dispatch via {ch['id']} ({ch['model']})", time.time()))
+                      f"auto-dispatch via {ch['id']} ({ch['model']})" +
+                      (f" → 落 {delivered}" if output_dir else ""), time.time()))
         conn.execute("UPDATE tasks SET status='review', result=?, updated_at=? WHERE id=?",
-                     (f"[{CLIENT}] 通道 {ch['id']} (cost={ch['cost']}) 已交付，待 review",
+                     (f"[{CLIENT}] 通道 {ch['id']} (cost={ch['cost']}) 已交付，待 review" +
+                      (f"；产物在 {delivered}" if output_dir and delivered != str(tdir / 'result.md') else ""),
                       time.time(), task_id))
     else:
         conn.execute("UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=?",
@@ -148,7 +162,7 @@ def run_once(dry_run: bool = False, project: str = "") -> int:
                 continue
             try:
                 answer, ch = execute(build_prompt(task), chain)
-                finish(conn, task["id"], True, answer, ch)
+                finish(conn, task["id"], True, answer, ch, output_dir=task["output_dir"] or "")
                 print(f"[done→review] {task['id']} via {ch['id']} ({len(answer)} chars)")
             except Exception as e:
                 finish(conn, task["id"], False, error=str(e))

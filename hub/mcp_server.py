@@ -70,6 +70,7 @@ def _migrate():
         "kind": "TEXT DEFAULT 'task'",       # P4 能力路由预留
         "priority": "INTEGER DEFAULT 0",
         "feedback": "TEXT DEFAULT ''",       # review 回流意见
+        "output_dir": "TEXT DEFAULT ''",     # 产物直落目录（如 Trae 项目文件夹）
     }
     for c, t in adds.items():
         if c not in cols:
@@ -124,7 +125,8 @@ def _safe_name(name: str) -> str:
 
 
 def _create_task(title: str, instructions: str, project: str = "default",
-                 parent_id: str = "", depends_on=None, priority: int = 0, kind: str = "task") -> dict:
+                 parent_id: str = "", depends_on=None, priority: int = 0, kind: str = "task",
+                 output_dir: str = "") -> dict:
     deps = [d.strip() for d in depends_on.split(",") if d.strip()] if isinstance(depends_on, str) else list(depends_on or [])
     if parent_id and not db("SELECT id FROM tasks WHERE id=?", (parent_id,), one=True):
         return {"ok": False, "msg": f"父任务 {parent_id} 不存在"}
@@ -134,10 +136,11 @@ def _create_task(title: str, instructions: str, project: str = "default",
     done_ids = {r["id"] for r in db("SELECT id FROM tasks WHERE status='done'")}
     status = "blocked" if any(d not in done_ids for d in deps) else "open"
     tid = uuid.uuid4().hex[:10]
-    db("""INSERT INTO tasks (id,title,instructions,status,parent_id,depends_on,project,kind,priority,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+    db("""INSERT INTO tasks (id,title,instructions,status,parent_id,depends_on,project,kind,priority,output_dir,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
        (tid, title, instructions, status, parent_id, json.dumps(deps, ensure_ascii=False),
-        project or "default", kind or "task", int(priority or 0), time.time(), time.time()))
+        project or "default", kind or "task", int(priority or 0), (output_dir or "").strip(),
+        time.time(), time.time()))
     return {"ok": True, "id": tid, "status": status, "blocked_by": deps if status == "blocked" else []}
 
 
@@ -177,10 +180,11 @@ def task_board(project: str = "") -> dict:
 
 @mcp.tool()
 def task_create(title: str, instructions: str, project: str = "default", parent_id: str = "",
-                depends_on: str = "", priority: int = 0, kind: str = "task") -> dict:
+                depends_on: str = "", priority: int = 0, kind: str = "task", output_dir: str = "") -> dict:
     """创建任务/子任务。depends_on 为逗号分隔的任务 id 列表——依赖未完成时任务为 blocked，
-    依赖全部 done 后自动解锁进 open 列。parent_id 挂子任务。kind 为能力路由预留（如 coding/writing/review）。"""
-    return _create_task(title, instructions, project, parent_id, depends_on, priority, kind)
+    依赖全部 done 后自动解锁进 open 列。parent_id 挂子任务。kind 为能力路由（coding/writing/reasoning 等）。
+    output_dir 为产物直落目录（绝对路径，如 Trae 项目文件夹）：dispatcher 交付时自动把结果复制进去。"""
+    return _create_task(title, instructions, project, parent_id, depends_on, priority, kind, output_dir)
 
 
 @mcp.tool()
@@ -353,7 +357,8 @@ async def rest_create(req: Request):
                      parent_id=body.get("parent_id") or "",
                      depends_on=body.get("depends_on"),
                      priority=body.get("priority") or 0,
-                     kind=body.get("kind") or "task")
+                     kind=body.get("kind") or "task",
+                     output_dir=body.get("output_dir") or "")
     if not r["ok"]:
         return JSONResponse(status_code=400, content={"error": r["msg"]})
     return JSONResponse({"id": r["id"], "status": r["status"]})

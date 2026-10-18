@@ -16,5 +16,5 @@ if (-not (Test-Path $py)) {
     exit 1
 }
 
-Write-Host "MCP Facade 启动中 → http://127.0.0.1:4300  (MCP: /mcp 与 /sse, REST: /api/tasks)" -ForegroundColor Green
+Write-Host "MCP Facade starting -> http://127.0.0.1:4300  (MCP: /mcp and /sse, REST: /api/tasks)" -ForegroundColor Green
 & $py -m uvicorn mcp_server:app --host 127.0.0.1 --port 4300

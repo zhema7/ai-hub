@@ -1,8 +1,36 @@
-# AI Hub — 个人多智能体工作台
+# AI Hub — Save Your Money 💰
 
-把手里所有 AI 额度（开放平台按量 Key、会员订阅、桌面 App 免费/会员额度）统一抽象成
+> **你已付费的 AI 额度，值得一个 API。**
+> ChatGPT 订阅、Kimi 会员、豆包 App 免费额度——这些钱已经花出去了，
+> 却因为没有官方 API 而只能手动聊天。AI Hub 把它们全部变成
+> **OpenAI 兼容接口 + 多智能体协作看板**，让便宜/免费的额度干重活，
+> 昂贵的 agent 用量一分不花。
+
+一个真实的省钱场景（也是本项目的日常工作流）：
+
+```
+在 Trae/任意 IDE 里建任务 → ChatGPT 的 chat 对话出结果（花的是便宜的消息额度，
+不是 Codex 的 agent 用量池）→ 产物自动落进项目文件夹 → 本地跑测试
+```
+
+**同样的活，Codex 一次任务消耗 50-200K tokens；chat 对话只要 5-20K——省 5-10 倍用量**，
+而豆包这类 App 额度更是零成本。AI Hub 把这条人肉搬运链路做成了全自动管道。
+
+技术上：把手里所有 AI 额度（开放平台按量 Key、会员订阅、桌面 App 免费/会员额度）统一抽象成
 **OpenAI 兼容的模型接口**，再在其上做**跨客户端、跨平台的多智能体协作调度**。
 本机私有部署，全部走 `127.0.0.1`。
+
+## 省钱账单（为什么这是真省，不是噱头）
+
+| 额度 | 原来只能 | 接入 AI Hub 后 | 成本 |
+|---|---|---|---|
+| 豆包 App 免费额度 | 手动聊天 | `doubao-app` 通道自动干活（9s/轮，CDP 后台驱动） | **¥0** |
+| ChatGPT 订阅 chat 消息 | 手动聊天 | `chatgpt-app` 通道：写文案/推理/诊断报错，替代 Codex agent 任务 | **¥0**（省下 5-10× 的 Codex 用量） |
+| Kimi 会员订阅 | 网页/CLI 手动用 | `kimi-vip` OAuth 桥 → 任意 OpenAI 客户端当主力模型 | **¥0** |
+| 昂贵的 IDE agent 积分（Trae/Cursor 等） | 内置模型每请求扣积分 | 自定义模型指向 AI Hub 网关，**官方规则：自定义模型 0 积分** | **¥0** |
+
+全部是**你已经付过费**的额度——AI Hub 不产生任何新费用，只是把它们从"手动聊天"
+解锁成"可编程资源"。合规路线：桌面 App 走官方 UIA 无障碍接口 / CDP 调试接口，不逆向协议。
 
 ## 核心差异化：UIA / CDP 桌面 App 通道
 
@@ -92,13 +120,15 @@ GitHub 全局搜索 "uiautomation llm agent" / "gui automation chatbot api" **�
 | 平台 | 通道 | 状态 |
 |---|---|---|
 | Kimi | OAuth 会员桥 :4100 | ✅ 已上线 |
-| 豆包 | 桌面 App UIA :4301 | ✅ 已上线 |
-| ChatGPT | 桌面 App CDP :4302 | 🔧 已验证可行性（DOM/输入框/发送链全部探明） |
+| 豆包 | 桌面 App CDP :4301（UIA 版保留作 fallback） | ✅ 已上线（P2 后台化完成，9s/轮零抢焦点） |
+| ChatGPT | 桌面 App CDP :4302 | ✅ 已上线（订阅 chat 额度，`reasoning` 类任务首选通道） |
 | Gemini / Grok / GLM / DeepSeek / Qwen | Web 会话桥（浏览器 Cookie 一次登录，照 kimi_bridge 模式） | 📋 待做 |
 | OpenAI /  Anthropic 等按量 Key | 网关直挂 | 📋 有 Key 即挂 |
 
-### P2 · 豆包执行器后台化
-CDP 优先（豆包同为 Electron），备选剪贴板 + WM_PASTE。目标：打字/读回复零前台抢占。
+### P2 · 豆包执行器后台化 —— ✅ 已完成
+豆包桌面端支持 `--remote-debugging-port=9223`，UIA 抢焦点路线全部换 CDP 注入：
+`data-streaming` 属性直读流式状态，完成判定靠 streaming=false + 文本稳定 + suggest chips。
+单轮 25-40s → **9s**，零前台抢占。
 
 ### P3 · 看板式多智能体协作（参照 routa）—— ✅ 首期已完成
 任务板升级为项目级看板，实现"**任意 AI 客户端跨端、跨平台共同完成一个项目**"：
@@ -155,14 +185,40 @@ copy ai-relay\.env.example ai-relay\.env   # 填 MOONSHOT_API_KEY / ARK_API_KEY
 # 4. 可选：豆包 App 通道（:4301，需已登录的豆包桌面端）
 .\hub\start-doubao.ps1
 
-# 5. 可选：任务板 MCP（:4300）
+# 5. 可选：ChatGPT App 通道（:4302，需已登录的 ChatGPT 桌面端）
+.\hub\start-chatgpt.ps1
+
+# 6. 可选：任务板 MCP（:4300）
 .\hub\start-mcp.ps1
 ```
 
 下游客户端配置片段见 `ai-relay/clients/`（Codex CLI）与 `hub/clients/`（Trae / WorkBuddy MCP）。
 
-## 进行中
+### 签名工作流：让 ChatGPT 的 chat 替你干 Codex 的活
 
-- **ChatGPT 桌面端接入（P1）**：CDP 已连通，页面/输入框（ProseMirror）/发送按钮全部探明，
-  正在封装执行器（execCommand insertText 后台打字 → 点发送 → 轮询回复 DOM）。
-- **豆包执行器后台化（P2）**：CDP / 剪贴板+WM_PASTE 方案选型中。
+把"chat 对话 → 结果落项目文件夹"全自动化的标准姿势（Trae / 任意 MCP 客户端）：
+
+```json
+{
+  "title": "给 utils.py 写一个带 LRU 缓存的限流函数",
+  "instructions": "纯函数实现 + 使用示例，输出完整代码块",
+  "kind": "reasoning",
+  "output_dir": "C:\\你的Trae项目\\docs\\aihub"
+}
+```
+
+Dispatcher 自动：认领 → **chatgpt-app 通道**（花订阅 chat 消息额度，Codex 用量 0 消耗）→
+产物写 `output_dir/aihub-<任务id>.md` → 进 review。IDE 里直接读文件、跑测试，报错再建下一单。
+
+IDE 自带模型积分同理：在 Trae 设置 → 模型 → 添加自定义模型，URL 填
+`http://127.0.0.1:4000/v1`——**自定义模型 0 积分**，日常问答/轻任务全部免费。
+
+## 已完成里程碑
+
+- **P1 ChatGPT 桌面通道 / P2 豆包后台化 / P3 看板协作 / P4 能力路由 / P5 Skill 化交付 全部上线**，
+  详见下方路线图各节的技术细节。
+- **TraeCode/VS Code 扩展**（`extension/ai-hub-collab-0.1.0.vsix`）：状态栏任务监控、
+  一键写 MCP 配置、服务体检——Install from VSIX 即装即用。
+- **Trae 一键接入链接**（免装扩展）：浏览器地址栏粘贴
+  `trae://trae.ai-ide/mcp-import?type=http&name=ai-hub-board&config=eyJ1cmwiOiJodHRwOi8vMTI3LjAuMC4xOjQzMDAvbWNwIn0=`
+  回车，Trae 自动完成任务板配置。
