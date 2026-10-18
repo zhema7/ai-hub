@@ -8,6 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+import cost
 import memory_store
 
 ROOT = Path(__file__).resolve().parent
@@ -15,7 +16,6 @@ DB = ROOT / "data" / "board.db"
 WORKS = ROOT / "data" / "workspaces"
 
 WINDOW = 24 * 3600           # 看板时间窗：近 24 小时
-RATE_USD_PER_MTOK = 1.0      # 等效按量价（$ / 百万 token），用于"省下多少"的粗估，看板标注 est.
 
 
 def _conn():
@@ -42,12 +42,15 @@ def collect(db=DB, now: float | None = None) -> dict:
     try:
         d: dict = {"now": now, "window_hours": WINDOW // 3600}
 
-        # 1) 今日节省：免费/会员通道完成的用量 × 等效按量价
-        r = _q(conn, "SELECT COALESCE(SUM(est_tokens),0) tok, COUNT(*) n FROM metrics "
-                     "WHERE ts>=? AND ok=1 AND cost_class IN ('free_app','member')", (since,))
-        tok, n = (r[0]["tok"], r[0]["n"]) if r else (0, 0)
-        d["savings"] = {"tokens": tok, "calls": n, "usd": tok / 1e6 * RATE_USD_PER_MTOK,
-                        "rate": RATE_USD_PER_MTOK}
+        # 1) 今日节省 + 实际支出：直接读 saved_usd / cost_usd（按通道费率折算，看板标注 est.）
+        r = _q(conn, "SELECT COALESCE(SUM(prompt_tokens),0) pt, COALESCE(SUM(completion_tokens),0) ct, "
+                     "COALESCE(SUM(saved_usd),0) saved, COALESCE(SUM(cost_usd),0) spent, COUNT(*) n "
+                     "FROM metrics WHERE ts>=? AND ok=1", (since,))
+        row = r[0] if r else {}
+        tok = (row.get("pt") or 0) + (row.get("ct") or 0)
+        d["savings"] = {"tokens": tok, "calls": row.get("n") or 0,
+                        "usd": row.get("saved") or 0, "spent_usd": row.get("spent") or 0,
+                        "rate_note": "各通道按公开 API 费率折算，App/会员通道无真 token 概念"}
 
         # 2) 通道热力：调用量 / 成功率 / 平均延迟 / 限流命中
         chans = _q(conn, """SELECT channel, cost_class, COUNT(*) n, SUM(ok) ok_n,
@@ -60,6 +63,32 @@ def collect(db=DB, now: float | None = None) -> dict:
             c["avg_ms"] = int(c["avg_ms"] or 0)
             c["channel"] = c["channel"] or "—"
         d["channels"] = chans
+
+        # 2b) 通道成本明细：每通道 prompt/completion token、等效按量成本、实际支出、节省
+        cost_rows = _q(conn, """SELECT channel, cost_class, COUNT(*) n,
+                                       SUM(prompt_tokens) pt, SUM(completion_tokens) ct,
+                                       SUM(cost_usd) spent, SUM(saved_usd) saved
+                                FROM metrics WHERE ts>=? AND ok=1
+                                GROUP BY channel, cost_class ORDER BY saved DESC""", (since,))
+        for c in cost_rows:
+            c["channel"] = c["channel"] or "—"
+            c["pt"] = c["pt"] or 0
+            c["ct"] = c["ct"] or 0
+            c["spent"] = c["spent"] or 0.0
+            c["saved"] = c["saved"] or 0.0
+            c["model"] = cost.channel_label(c["channel"])
+        d["costs"] = cost_rows
+
+        # 2c) 订阅额度消耗（member 档：等效按量价值 / 年费，看已用多少订阅价值）
+        subs = {}
+        for c in cost_rows:
+            sub = cost.subscription(c["channel"])
+            if sub and c["saved"] > 0:
+                subs[c["channel"]] = {"model": sub["model"], "sub_cny": sub["cny"],
+                                      "sub_usd": sub["usd"],
+                                      "used_cny": c["saved"] * cost.USD_CNY,
+                                      "pct": min(100.0, c["saved"] * cost.USD_CNY / sub["cny"] * 100)}
+        d["subscriptions"] = subs
 
         # 3) 数据源心跳（gateway / bridge / board / 任意上报方）
         d["sources"] = _q(conn, "SELECT source, COUNT(*) n, MAX(ts) last FROM metrics GROUP BY source ORDER BY last DESC")
@@ -155,10 +184,14 @@ def render(d: dict) -> str:
     cnt = d["funnel"]
 
     # hero
-    hero = (f'<div class="card"><h2>近 {d["window_hours"]}h 省下的按量成本 <span class="pill">est.</span></h2>'
+    hero = (f'<div class="card"><h2>近 {d["window_hours"]}h 节省的按量成本 <span class="pill">est.</span></h2>'
             f'<div class="hero"><div class="big">${sv["usd"]:.2f}</div>'
-            f'<div class="u">免费/会员通道完成 {sv["calls"]} 次 · 等效 {sv["tokens"]:,} token'
-            f'（按 ${sv["rate"]:.2f}/百万 token 估算，App 通道无真 token 概念）</div></div></div>')
+            f'<div class="u">等效 ¥{sv["usd"] * cost.USD_CNY:.2f} · 完成 {sv["calls"]} 次调用 · '
+            f'等效 {sv["tokens"]:,} token'
+            f'（各通道按公开 API 费率折算，App/会员通道无真 token 概念）</div></div>'
+            f'<div class="u" style="margin-top:6px">同期实际现金支出：'
+            f'<b class="{"met" if sv["spent_usd"] else "free"}">${sv["spent_usd"]:.4f}</b> '
+            f'（按量 Key 通道才产生真金；免费/会员边际 0）</div></div>')
 
     # funnel
     funnel = " · ".join(f'{k} <b>{v}</b>' for k, v in
@@ -218,6 +251,39 @@ def render(d: dict) -> str:
     else:
         ws_html = '<div class="empty">暂无工作舱</div>'
 
+    # 成本明细表
+    if d["costs"]:
+        cost_rows = "".join(
+            f'<tr><td>{e(c["channel"])} <span class="pill {e(c["cost_class"] or "muted")}">'
+            f'{e(c["cost_class"] or "-")}</span><div class="muted" style="font-size:11px">'
+            f'{e(c["model"])}</div></td>'
+            f'<td class="num">{c["n"]}</td>'
+            f'<td class="num">{c["pt"]:,}</td>'
+            f'<td class="num">{c["ct"]:,}</td>'
+            f'<td class="num met">${c["spent"]:.4f}</td>'
+            f'<td class="num free">${c["saved"]:.4f}<br><span class="muted">≈¥{c["saved"]*cost.USD_CNY:.2f}</span></td></tr>'
+            for c in d["costs"])
+        cost_html = ('<table><tr><th>通道 / 等效模型</th><th class="num">调用</th>'
+                     '<th class="num">in tok</th><th class="num">out tok</th>'
+                     '<th class="num">实际支出</th><th class="num">节省</th></tr>'
+                     + cost_rows + '</table>')
+    else:
+        cost_html = '<div class="empty">暂无调用记录</div>'
+
+    # 订阅额度消耗表
+    if d["subscriptions"]:
+        sub_rows = "".join(
+            f'<tr><td>{e(ch)}</td><td>{e(v["model"])}</td>'
+            f'<td class="num">¥{v["sub_cny"]:,}/年</td>'
+            f'<td class="num">¥{v["used_cny"]:.2f}</td>'
+            f'<td><div class="bar"><span style="width:{v["pct"]:.1f}%;background:var(--mem)"></span></div>'
+            f'<div class="muted" style="font-size:11px">{v["pct"]:.1f}% 订阅价值</div></td></tr>'
+            for ch, v in d["subscriptions"].items())
+        sub_html = ('<table><tr><th>订阅通道</th><th>等效模型</th><th class="num">年费</th>'
+                    '<th class="num">已用价值</th><th>额度消耗</th></tr>' + sub_rows + '</table>')
+    else:
+        sub_html = '<div class="empty">暂无会员通道调用（Kimi Code / ChatGPT 订阅）</div>'
+
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
     return f"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="30">
@@ -230,6 +296,12 @@ def render(d: dict) -> str:
   <div class="card"><h2>通道热力（近 {d['window_hours']}h）</h2>{chan_html}</div>
   <div class="card"><h2>额度水位 / 数据源心跳</h2>{src_html}
     <div class="muted" style="margin-top:10px;font-size:12px">限流命中见左表；App 通道被限流时桥会记一行 ok=0、note=limit…</div></div>
+</div>
+<div class="card"><h2>成本明细（近 {d['window_hours']}h，<span class="pill">est.</span> 按量等效价）</h2>{cost_html}
+  <div class="muted" style="margin-top:8px;font-size:12px">in/out tok：网关通道取真值，App/会员通道按字符估算；实际支出=按量 Key 真金，免费/会员边际 0；节省=等效按量价−实际支出。</div>
+</div>
+<div class="card"><h2>会员订阅额度消耗（<span class="pill">est.</span> 已用价值 / 年费）</h2>{sub_html}
+  <div class="muted" style="margin-top:8px;font-size:12px">把会员通道完成的调用按等效按量价折算成「已消耗的订阅价值」，与年费对比；不是逐调用扣费，仅供直观判断订阅是否用回本。</div>
 </div>
 <div class="two">
   <div class="card"><h2>客户端用量（谁在干活）</h2>{cli_html}</div>

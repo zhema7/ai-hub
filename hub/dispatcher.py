@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import httpx
+import cost
 import memory_store
 import metrics_log
 import router
@@ -131,8 +132,9 @@ def build_prompt(conn, task: sqlite3.Row) -> str:
     return "\n\n".join(parts)
 
 
-def execute(prompt: str, chain: list[dict]) -> tuple[str, dict]:
-    """按 fallback 链逐通道尝试，返回 (回答, 命中的通道)；全失败抛异常。"""
+def execute(prompt: str, chain: list[dict]) -> tuple[str, dict, dict]:
+    """按 fallback 链逐通道尝试，返回 (回答, 命中通道, usage)；全失败抛异常。
+    usage = {prompt_tokens, completion_tokens}，网关通道取真值，App/会员通道由调用方按字符估。"""
     errors = []
     for ch in chain:
         headers = {}
@@ -150,18 +152,30 @@ def execute(prompt: str, chain: list[dict]) -> tuple[str, dict]:
                 answer = (data["choices"][0]["message"]["content"] or "").strip()
                 if not answer:
                     raise ValueError("空回答")
-                return answer, ch
+                usage = (data.get("usage") or {})
+                return answer, ch, {
+                    "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                    "completion_tokens": int(usage.get("completion_tokens") or 0),
+                }
         except Exception as e:
             errors.append(f"{ch['id']}: {type(e).__name__} {str(e)[:120]}")
     raise RuntimeError("全链路失败 | " + " ; ".join(errors))
 
 
 def finish(conn, task: sqlite3.Row, ok: bool, answer: str = "", ch: dict | None = None,
-           error: str = "", prompt_chars: int = 0, latency_ms: int = 0):
-    """交付/失败回写 + 记账：产物落盘、episodic 记忆、metrics 埋点（P6a/P7b）。"""
+           error: str = "", prompt_chars: int = 0, latency_ms: int = 0,
+           usage: dict | None = None):
+    """交付/失败回写 + 记账：产物落盘、episodic 记忆、metrics 埋点（含成本/节省，P8）。"""
     task_id, project = task["id"], task["project"] or "default"
     kind, output_dir = task["kind"] or "", task["output_dir"] or ""
     channel, cost_class = (ch["id"] if ch else ""), (ch.get("cost", "") if ch else "")
+    # token：优先用网关真值，否则按字符估算
+    pt = int((usage or {}).get("prompt_tokens") or 0)
+    ct = int((usage or {}).get("completion_tokens") or 0)
+    if pt <= 0 and ct <= 0:
+        pt, ct = cost.estimate_tokens(prompt_chars, len(answer))
+    actual_cny = cost.actual_cost_cny(channel, pt, ct)
+    saved_cny = cost.saved_cny(channel, pt, ct)
     if ok:
         tdir = ARTS / task_id
         tdir.mkdir(parents=True, exist_ok=True)
@@ -194,14 +208,18 @@ def finish(conn, task: sqlite3.Row, ok: bool, answer: str = "", ch: dict | None 
             print(f"[memory] episodic 写入失败（忽略）: {type(e).__name__}: {e}")
         metrics_log.log(conn, source="board", channel=channel, kind=kind, project=project,
                         task_id=task_id, ok=1, latency_ms=latency_ms, prompt_chars=prompt_chars,
-                        answer_chars=len(answer), cost_class=cost_class, cost_usd=0.0,
-                        note=f"delivered via {channel}")
+                        answer_chars=len(answer), prompt_tokens=pt, completion_tokens=ct,
+                        cost_class=cost_class, cost_usd=cost.to_usd(actual_cny),
+                        saved_usd=cost.to_usd(saved_cny),
+                        note=f"delivered via {channel}; saved≈¥{saved_cny:.2f}")
     else:
         conn.execute("UPDATE tasks SET status='failed', error=?, updated_at=? WHERE id=?",
                      (error[:500], time.time(), task_id))
         metrics_log.log(conn, source="board", channel=channel, kind=kind, project=project,
                         task_id=task_id, ok=0, latency_ms=latency_ms, prompt_chars=prompt_chars,
-                        answer_chars=0, cost_class=cost_class, note=f"failed: {error[:120]}")
+                        answer_chars=0, prompt_tokens=pt, completion_tokens=ct,
+                        cost_class=cost_class, cost_usd=cost.to_usd(actual_cny),
+                        saved_usd=cost.to_usd(saved_cny), note=f"failed: {error[:120]}")
     conn.commit()
 
 
@@ -227,10 +245,11 @@ def run_once(dry_run: bool = False, project: str = "") -> int:
                 finish(conn, task, False, error="dry-run：仅验证路由决策", prompt_chars=len(prompt))
                 continue
             try:
-                answer, ch = execute(prompt, chain)
+                answer, ch, usage = execute(prompt, chain)
                 finish(conn, task, True, answer, ch, prompt_chars=len(prompt),
-                       latency_ms=int((time.time() - t0) * 1000))
-                print(f"[done→review] {task['id']} via {ch['id']} ({len(answer)} chars)")
+                       latency_ms=int((time.time() - t0) * 1000), usage=usage)
+                print(f"[done→review] {task['id']} via {ch['id']} ({len(answer)} chars, "
+                      f"pt={usage.get('prompt_tokens')} ct={usage.get('completion_tokens')})")
             except Exception as e:
                 finish(conn, task, False, error=str(e), prompt_chars=len(prompt),
                        latency_ms=int((time.time() - t0) * 1000))

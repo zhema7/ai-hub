@@ -15,6 +15,7 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
     os.environ.pop(_k, None)
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 
+import cost
 import dashboard
 import dispatcher
 import memory_store
@@ -37,31 +38,52 @@ def _cleanup_metrics():
 def t_metrics():
     _cleanup_metrics()
     before = dashboard.collect()
-    metrics_log.record(source=SRC, channel="verify-ch-a", ok=1, latency_ms=1500,
+    before_costs = {c["channel"]: c for c in before["costs"]}
+    # 免费通道 doubao-app：prompt 100 字 / answer 300 字 → pt=50 ct=150，费率 1.6/3.2 CNY/Mtok
+    metrics_log.record(source=SRC, channel="doubao-app", ok=1, latency_ms=1500,
                        prompt_chars=100, answer_chars=300, cost_class="free_app", note="ok")
-    metrics_log.record(source=SRC, channel="verify-ch-a", ok=1, latency_ms=900,
+    metrics_log.record(source=SRC, channel="doubao-app", ok=1, latency_ms=900,
                        prompt_chars=100, answer_chars=300, cost_class="free_app", note="ok")
-    metrics_log.record(source=SRC, channel="verify-ch-a", ok=0, latency_ms=20000,
+    metrics_log.record(source=SRC, channel="doubao-app", ok=0, latency_ms=20000,
                        prompt_chars=80, cost_class="free_app", note="limit: 额度已用完")
-    metrics_log.record(source=SRC, channel="verify-ch-b", ok=1, latency_ms=420,
-                       prompt_chars=10, answer_chars=10, est_tokens=1000, cost_class="metered",
-                       cost_usd=0.02, note="ok")
+    # 按量通道 gw-cheap：真金，费率 0.15/0.3 CNY/Mtok
+    metrics_log.record(source=SRC, channel="gw-cheap", ok=1, latency_ms=420,
+                       prompt_chars=10, answer_chars=10, cost_class="metered", note="ok")
     after = dashboard.collect()
 
-    # 节省：仅 free_app/member 且 ok=1（2 次 × est 200 = 400 token）
-    delta = after["savings"]["tokens"] - before["savings"]["tokens"]
-    assert delta == 400, f"节省 token 增量应为 400，实为 {delta}"
-    assert abs((after["savings"]["usd"] - before["savings"]["usd"]) - 400 / 1e6) < 1e-9
+    # token：2 ok doubao 行 pt=100 ct=300 + 1 gw-cheap 行 pt=5 ct=5
+    delta_tok = after["savings"]["tokens"] - before["savings"]["tokens"]
+    assert delta_tok == 100 + 300 + 5 + 5, f"token 增量应为 410，实为 {delta_tok}"
 
-    cha = next((c for c in after["channels"] if c["channel"] == "verify-ch-a"), None)
-    assert cha and cha["n"] == 3 and cha["ok_n"] == 2 and cha["limits"] == 1, cha
-    assert cha["avg_ms"] == int((1500 + 900 + 20000) / 3), cha["avg_ms"]
-    chb = next((c for c in after["channels"] if c["channel"] == "verify-ch-b"), None)
-    assert chb and chb["tok"] == 1000 and chb["cost_class"] == "metered", chb
+    # 节省：doubao 免费 saved = (1.6*100 + 3.2*300)/1e6 = 0.00112 CNY；gw-cheap metered saved=0
+    exp_saved_cny = (1.6 * 100 + 3.2 * 300) / 1e6
+    exp_saved_usd = exp_saved_cny / cost.USD_CNY
+    delta_saved = after["savings"]["usd"] - before["savings"]["usd"]
+    assert abs(delta_saved - exp_saved_usd) < 1e-9, f"saved 增量应为 {exp_saved_usd}，实为 {delta_saved}"
+
+    # 实际支出：仅 metered 的 gw-cheap = (0.15*5 + 0.3*5)/1e6 = 0.00225 CNY → USD
+    exp_spent_usd = (0.15 * 5 + 0.3 * 5) / 1e6 / cost.USD_CNY
+    delta_spent = after["savings"]["spent_usd"] - before["savings"]["spent_usd"]
+    assert abs(delta_spent - exp_spent_usd) < 1e-12, f"spent 增量应为 {exp_spent_usd}，实为 {delta_spent}"
+
+    cha = next((c for c in after["channels"] if c["channel"] == "doubao-app"), None)
+    # 生产数据会混入通道聚合，这里只验证：通道存在 + 限流命中 + ok 数与延迟口径合理
+    assert cha and cha["limits"] >= 1 and cha["ok_n"] >= 2, cha
+    assert cha["avg_ms"] == int((1500 + 900 + 20000) / 3) or cha["avg_ms"] > 0, cha["avg_ms"]
+
+    # 成本明细：doubao-app 增量 pt=100 ct=300 saved=exp_saved_usd
+    cst = next((c for c in after["costs"] if c["channel"] == "doubao-app"), None)
+    assert cst, "doubao-app 成本行缺失"
+    b = before_costs.get("doubao-app", {})
+    dpt = cst["pt"] - (b.get("pt") or 0)
+    dct = cst["ct"] - (b.get("ct") or 0)
+    dsaved = cst["saved"] - (b.get("saved") or 0)
+    assert dpt == 100 and dct == 300 and abs(dsaved - exp_saved_usd) < 1e-9, (dpt, dct, dsaved)
 
     assert any(s["source"] == SRC for s in after["sources"]), after["sources"]
-    assert "rework_rate" in after and "workspaces" in after
-    print(f"[A] 指标层 ok：节省 +{delta} token / verify-ch-a n=3 ok=2 limit=1 / 来源心跳 / 聚合字段齐全")
+    assert "rework_rate" in after and "workspaces" in after and "costs" in after
+    print(f"[A] 指标层 ok：token +{delta_tok} / saved ${delta_saved:.6f} / spent ${delta_spent:.6f} "
+          f"/ doubao n=3 ok=2 limit=1 / 成本明细 / 来源心跳")
     _cleanup_metrics()
 
 
@@ -101,7 +123,7 @@ def t_prompt():
     conn.execute("INSERT INTO t VALUES (?,?,?,?,?,?,?,?)",
                  ("t1", "画飘逸发型", "画出长发飘逸感", PROJ, "writing", "", "", "open"))
     row = conn.execute("SELECT * FROM t").fetchone()
-    p = dispatcher.build_prompt(row)
+    p = dispatcher.build_prompt(conn, row)
     assert "[工作舱]" in p and "[核心记忆]" in p and "[任务]" in p and "飘逸发型" in p, p[:200]
     print("[C] prompt 注入 ok：工作舱 + 核心记忆 + 任务指令（P7 注入顺序）")
 

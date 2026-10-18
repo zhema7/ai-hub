@@ -5,11 +5,19 @@
 # 启动：由 start-kimi-vip.ps1 拉起；依赖 ai-relay/.venv 里的 fastapi/uvicorn/httpx
 import asyncio
 import json
+import sys
 import time
 import uuid
 from pathlib import Path
 
+# 复用 hub 的费率表（cost.py），与其它通道记账口径一致
+_HUB = Path(__file__).resolve().parent.parent / "hub"
+if str(_HUB) not in sys.path:
+    sys.path.insert(0, str(_HUB))
+
+import cost
 import httpx
+import metrics_log
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -19,7 +27,10 @@ TOKEN_FILE = ROOT / ".kimi-web-token"
 SESSION_CWD = "c:/kimi/修仙与地下城"  # 已信任的工作区，桥接会话都建在这里
 TURN_TIMEOUT = 600  # 单次回答最长等待（秒）
 
-# 对外模型名 → kimi web 模型 ID
+MODEL = "kimi-vip"
+COST_CLASS = "member"
+CHANNEL = "kimi-vip"
+_LIMIT_HINT = ("限流", "已用完", "速率", "rate limit", "too many", "quota", "额度")
 MODEL_MAP = {
     "kimi-vip": "kimi-code/kimi-for-coding",            # K2.8 Preview，1M 上下文
     "kimi-vip-hs": "kimi-code/kimi-for-coding-highspeed",  # K2.7 Code 高速版，256k
@@ -116,7 +127,7 @@ async def _run_turn(client: httpx.AsyncClient, prompt: str, model_id: str) -> st
             pass
 
 
-def _completion(model: str, text: str) -> dict:
+def _completion(model: str, text: str, pt: int = 0, ct: int = 0) -> dict:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
@@ -127,7 +138,8 @@ def _completion(model: str, text: str) -> dict:
             "message": {"role": "assistant", "content": text},
             "finish_reason": "stop",
         }],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct,
+                  "total_tokens": pt + ct},
     }
 
 
@@ -147,11 +159,26 @@ async def chat(req: Request):
     if not prompt.strip():
         return JSONResponse(status_code=400, content={"error": {"message": "messages 为空"}})
 
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(trust_env=False) as client:
             text = await _run_turn(client, prompt, model_id)
     except Exception as e:
+        s = str(e).lower()
+        note = ("limit: " if any(k in s for k in _LIMIT_HINT) else "error: ") + str(e)[:100]
+        metrics_log.record(source="bridge", channel=CHANNEL, ok=0,
+                           latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
+                           cost_class=COST_CLASS, note=note)
         return JSONResponse(status_code=502, content={"error": {"message": f"kimi bridge: {e}"}})
+    pt, ct = cost.estimate_tokens(len(prompt), len(text))
+    actual = cost.actual_cost_cny(CHANNEL, pt, ct)
+    saved = cost.saved_cny(CHANNEL, pt, ct)
+    metrics_log.record(source="bridge", channel=CHANNEL, ok=1,
+                       latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
+                       answer_chars=len(text), prompt_tokens=pt, completion_tokens=ct,
+                       cost_class=COST_CLASS, cost_usd=cost.to_usd(actual),
+                       saved_usd=cost.to_usd(saved),
+                       note=f"ok; saved≈¥{saved:.2f}（Kimi Code 会员额度）")
 
     if body.get("stream"):  # 简化流式：整段一次性吐出
         cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -171,7 +198,7 @@ async def chat(req: Request):
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    return _completion(model, text)
+    return _completion(model, text, pt, ct)
 
 
 if __name__ == "__main__":

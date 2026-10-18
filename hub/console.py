@@ -134,7 +134,7 @@ def render(d: dict) -> str:
   <div class="card"><h2>快捷建单</h2>{form}</div>
   <div class="card"><h2>近 {d['window_hours']}h 节省 <span class="pill">est.</span></h2>
     <div class="hero"><div class="big">${sv['usd']:.2f}</div>
-    <div class="u">免费/会员通道 {sv['calls']} 次 · 等效 {sv['tokens']:,} token</div></div>
+    <div class="u">{sv['calls']} 次调用 · 等效 {sv['tokens']:,} token · 实际支出 ${sv['spent_usd']:.4f}</div></div>
     <div style="margin-top:12px">{chan_html}</div></div>
 </div>
 <div class="two">

@@ -18,6 +18,7 @@ import json
 import time
 import uuid
 
+import cost
 import metrics_log
 
 MODEL = "chatgpt-app"
@@ -53,7 +54,7 @@ def _flatten(messages: list) -> str:
     return "\n\n".join(parts)
 
 
-def _completion(text: str) -> dict:
+def _completion(text: str, pt: int = 0, ct: int = 0) -> dict:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
@@ -62,7 +63,8 @@ def _completion(text: str) -> dict:
         "choices": [{"index": 0,
                      "message": {"role": "assistant", "content": text},
                      "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct,
+                  "total_tokens": pt + ct},
     }
 
 
@@ -94,9 +96,15 @@ async def chat(req: Request):
                                latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
                                cost_class=COST_CLASS, note=_note(e))
             return JSONResponse(status_code=502, content={"error": {"message": f"chatgpt bridge: {e}"}})
+    pt, ct = cost.estimate_tokens(len(prompt), len(text))
+    actual = cost.actual_cost_cny(MODEL, pt, ct)
+    saved = cost.saved_cny(MODEL, pt, ct)
     metrics_log.record(source="bridge", channel=MODEL, ok=1,
                        latency_ms=int((time.time() - t0) * 1000), prompt_chars=len(prompt),
-                       answer_chars=len(text), cost_class=COST_CLASS, note="ok")
+                       answer_chars=len(text), prompt_tokens=pt, completion_tokens=ct,
+                       cost_class=COST_CLASS, cost_usd=cost.to_usd(actual),
+                       saved_usd=cost.to_usd(saved),
+                       note=f"ok; saved≈¥{saved:.2f}")
 
     if body.get("stream"):  # 简化流式：整段一次性吐出
         cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -115,7 +123,7 @@ async def chat(req: Request):
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    return _completion(text)
+    return _completion(text, pt, ct)
 
 
 if __name__ == "__main__":
